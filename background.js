@@ -107,7 +107,7 @@ async function chamarGeminiComRetry(url, body, tentativas = 4) {
 }
 
 async function gerarResumoIA(apiKey, partes) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(
     apiKey
   )}`;
 
