@@ -24,19 +24,17 @@ Em tópicos curtos, para o atendente bater o olho e entender na hora. Use exatam
 Frases curtas e diretas, sem floreios. No máximo ~15 palavras por tópico.`,
 
     normal: `TIPO DE RESUMO: NORMAL
-Resumo objetivo do atendimento, informando o necessário para quem for continuar o caso. Use exatamente esta estrutura (mesmo padrão usado pela IA da empresa):
-- **Motivo do contato:** o que o cliente queria/qual o problema, com o módulo do sistema e dados relevantes (ex: nome do aluno) quando fizerem parte do relato.
-- **O que já foi feito:** as principais ações e orientações do agente durante o atendimento.
-- **Pendências:** o que ainda falta resolver ou aguardar.
-- **Tom do usuário:** como o cliente se comportou/expressou (ex: neutro, insatisfeito, satisfeito, impaciente).
-Seja conciso — sem repetir informação.`,
+Resumo objetivo do atendimento, informando o necessário para quem for continuar o caso. Use exatamente esta estrutura:
+- **Dor do cliente:** qual o problema/necessidade relatado, com módulo do sistema e dados relevantes (ex: nome do aluno) quando fizerem parte do relato.
+- **O que foi abordado:** as principais dúvidas tratadas e as ações/orientações do agente durante o atendimento.
+- **O que falta resolver:** pendências, status atual, próximos passos ou o que ainda está aguardando algo/alguém.
+Um pouco mais de contexto que o resumo breve, mas sem repetir informação — frases completas e diretas.`,
 
     detalhado: `TIPO DE RESUMO: DETALHADO
-O foco aqui é detalhar tudo o que foi discutido no atendimento, para outro atendente entender o caso a fundo sem reler a conversa inteira. Organize assim:
-- **Motivo do contato:** o problema/dúvida inicial, com módulo do sistema e dados relevantes (ex: nome do aluno) quando citados.
-- **Assuntos abordados:** cada dúvida ou ponto tratado na conversa, com detalhe do que foi perguntado.
-- **Como foi resolvido/orientado:** a resposta, solução ou instrução dada para cada ponto acima.
-- **Pendências:** o que ficou em aberto, sem solução, ou aguardando algo/alguém.
+O foco aqui é detalhar tudo o que foi discutido no atendimento, para outro atendente entender o caso a fundo sem reler a conversa inteira. Use exatamente esta estrutura:
+- **Dor do cliente:** o problema/dúvida inicial, com módulo do sistema e dados relevantes (ex: nome do aluno) quando citados.
+- **O que foi abordado:** cada dúvida ou ponto tratado na conversa, com detalhe do que foi perguntado, verificado e como foi respondido/orientado.
+- **O que falta resolver:** o que ficou em aberto, sem solução, ou aguardando algo/alguém.
 Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tópico não tiver informação na conversa, escreva "Não informado".`,
   };
 
@@ -202,13 +200,164 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return partes;
   }
 
-  function formatarSaida(texto) {
-    const escapado = texto
+  function escaparHtml(texto) {
+    return (texto || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
-    return escapado.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   }
+
+  function formatarSaida(texto) {
+    return escaparHtml(texto).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  }
+
+  /* ========================================================================
+     Renderização do resumo como lista de itens com ícone (um por tópico
+     "- **Rótulo:** texto" que a IA devolve), com fallback para texto puro
+     caso a resposta não siga esse formato.
+     ======================================================================== */
+  const ICONES_ITEM = {
+    dor: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.2l8.8-8.8a5.5 5.5 0 0 0 0-7.8Z"></path>',
+    abordado: '<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"></path><polyline points="22 4 12 14.1 8.5 10.6"></polyline>',
+    faltaResolver: '<circle cx="12" cy="12" r="9.5"></circle><polyline points="12 6.5 12 12 16 14.2"></polyline>',
+    info: '<circle cx="12" cy="12" r="9.5"></circle><line x1="12" y1="16" x2="12" y2="11.3"></line><line x1="12" y1="7.7" x2="12.01" y2="7.7"></line>',
+  };
+
+  function iconeParaRotulo(rotulo) {
+    const r = rotulo.toLowerCase();
+    if (r.includes("dor") || r.includes("motivo")) return { svg: ICONES_ITEM.dor, variante: "rosa" };
+    if (r.includes("falta resolver") || r.includes("pendênc")) return { svg: ICONES_ITEM.faltaResolver, variante: "ambar" };
+    if (
+      r.includes("abordado") ||
+      r.includes("feito") ||
+      r.includes("assuntos") ||
+      r.includes("resolvido") ||
+      r.includes("orientado") ||
+      r.includes("tom do")
+    ) {
+      return { svg: ICONES_ITEM.abordado, variante: "roxo" };
+    }
+    return { svg: ICONES_ITEM.info, variante: "roxo" };
+  }
+
+  function analisarItens(texto) {
+    const linhas = texto.split("\n");
+    const itens = [];
+    linhas.forEach((linha) => {
+      const m = linha.match(/^[-*]\s*\*\*(.+?)\*\*:?\s*(.*)$/);
+      if (m) {
+        itens.push({ rotulo: m[1].trim(), texto: m[2].trim() });
+      } else if (itens.length && linha.trim()) {
+        itens[itens.length - 1].texto += ` ${linha.trim()}`;
+      }
+    });
+    return itens;
+  }
+
+  function renderizarResumo(texto) {
+    const container = painelEl.querySelector("#rwc-result-text");
+    const itens = analisarItens(texto);
+    if (!itens.length) {
+      container.innerHTML = `<div class="rwc-result-plain">${formatarSaida(texto)}</div>`;
+      return;
+    }
+    container.innerHTML = itens
+      .map((item, i) => {
+        const { svg, variante } = iconeParaRotulo(item.rotulo);
+        const divisor = i < itens.length - 1 ? '<div class="rwc-item-divider"></div>' : "";
+        return `
+          <div class="rwc-item">
+            <span class="rwc-item-icon rwc-item-icon--${variante}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>
+            </span>
+            <div class="rwc-item-body"><strong>${escaparHtml(item.rotulo)}:</strong> ${formatarSaida(item.texto)}</div>
+          </div>
+          ${divisor}
+        `;
+      })
+      .join("");
+  }
+
+  /* ========================================================================
+     Estado do resumo em background — sobrevive ao fechamento da aba.
+     Depois que a leitura da tela termina e as partes são enviadas para o
+     background.js, a geração continua rodando lá independentemente desta
+     aba estar aberta. O resultado (ou erro) fica salvo em storage; aqui só
+     refletimos esse estado quando ele pertence à conversa atual.
+     ======================================================================== */
+  function gerarSolicitacaoId() {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function pertenceAConversaAtual(dados) {
+    return !!dados && dados.url === location.href;
+  }
+
+  // Se o background morrer no meio da geração (ex: service worker
+  // encerrado pelo Chrome), o storage fica travado em "gerando" para
+  // sempre. Depois desse tempo sem atualização, tratamos como falho em
+  // vez de mostrar um carregamento infinito.
+  const GERANDO_TIMEOUT_MS = 90000;
+
+  function exibirResumo(dados, opcoes) {
+    if (!dados) return;
+    if (!pertenceAConversaAtual(dados)) return;
+    const forcarSelecao = !!(opcoes && opcoes.forcarSelecao);
+    if (!forcarSelecao && dados.tipo !== tipoEmAndamento) return;
+
+    if (forcarSelecao) {
+      abrirPainel();
+      tipoEmAndamento = dados.tipo;
+      marcarTipoAtivo(dados.tipo);
+    }
+    if (!painelEl) return;
+
+    painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
+    esconderStatus();
+
+    if (dados.status === "gerando" && Date.now() - (dados.atualizadoEm || 0) > GERANDO_TIMEOUT_MS) {
+      definirCarregando(false);
+      mostrarStatus("error", "A geração anterior não terminou (a extensão pode ter sido reiniciada). Tente novamente.");
+    } else if (dados.status === "gerando") {
+      definirCarregando(true);
+      mostrarStatus("loading", "Gerando o resumo...");
+    } else if (dados.status === "pronto") {
+      definirCarregando(false);
+      painelEl.querySelector("#rwc-result-tag").textContent = ROTULOS_TIPO[dados.tipo] || "Resumo";
+      renderizarResumo(dados.texto);
+      painelEl.querySelector("#rwc-result").dataset.raw = dados.texto;
+      painelEl.querySelector("#rwc-result").classList.remove("rwc-hidden");
+    } else if (dados.status === "erro") {
+      definirCarregando(false);
+      mostrarStatus("error", dados.erro || "Ocorreu um erro inesperado.");
+    }
+  }
+
+  // Se a extensão for recarregada (chrome://extensions) com esta aba já
+  // aberta, o content script antigo fica órfão: chrome.runtime.id vira
+  // undefined e qualquer chamada a chrome.storage/chrome.runtime rejeita
+  // com "Extension context invalidated". Não tem como recuperar a aba sem
+  // um F5 nela, então só evitamos deixar essas chamadas sem tratamento.
+  function extensaoValida() {
+    return !!(chrome.runtime && chrome.runtime.id);
+  }
+
+  async function restaurarUltimoResumoSeCorresponder() {
+    if (!extensaoValida()) return;
+    try {
+      const { rwcUltimoResumo } = await chrome.storage.local.get("rwcUltimoResumo");
+      if (pertenceAConversaAtual(rwcUltimoResumo)) {
+        exibirResumo(rwcUltimoResumo, { forcarSelecao: true });
+      }
+    } catch (_) {
+      /* contexto da extensão invalidado — ignora */
+    }
+  }
+
+  chrome.storage.onChanged.addListener((mudancas, area) => {
+    if (area !== "local" || !mudancas.rwcUltimoResumo) return;
+    exibirResumo(mudancas.rwcUltimoResumo.newValue);
+  });
 
   function criarPainel() {
     const painel = document.createElement("div");
@@ -216,12 +365,27 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     painel.innerHTML = `
       <div class="rwc-header">
         <div class="rwc-brand">
-          <span class="rwc-brand-name">Rewind<span class="rwc-brand-accent"> Chat</span></span>
-          <span class="rwc-brand-by">por Next Fit</span>
+          <span class="rwc-brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 40" fill="none">
+              <path d="M25 7L9 20L25 33" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M39 7L23 20L39 33" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </span>
+          <span class="rwc-brand-copy">
+            <span class="rwc-brand-script">
+              Rewind
+              <svg class="rwc-brand-spark" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2l1.8 5.6L19 9l-5.2 1.4L12 16l-1.8-5.6L5 9l5.2-1.4L12 2Z"></path></svg>
+            </span>
+            <span class="rwc-brand-bold">Chat</span>
+          </span>
         </div>
         <div class="rwc-header-actions">
-          <button type="button" class="rwc-icon-btn" id="rwc-settings-toggle" title="Configurações" aria-label="Configurações">⚙</button>
-          <button type="button" class="rwc-icon-btn" id="rwc-close" title="Fechar" aria-label="Fechar">✕</button>
+          <button type="button" class="rwc-icon-btn" id="rwc-settings-toggle" title="Configurações" aria-label="Configurações">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
+          <button type="button" class="rwc-icon-btn" id="rwc-close" title="Fechar" aria-label="Fechar">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
         </div>
       </div>
 
@@ -235,9 +399,18 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       <div class="rwc-body">
         <span class="rwc-field-label">Tipo de resumo</span>
         <div class="rwc-segmented" id="rwc-type-selector" role="tablist">
-          <button type="button" class="rwc-seg-btn" data-type="breve" role="tab">Breve</button>
-          <button type="button" class="rwc-seg-btn" data-type="normal" role="tab">Normal</button>
-          <button type="button" class="rwc-seg-btn" data-type="detalhado" role="tab">Detalhado</button>
+          <button type="button" class="rwc-seg-btn" data-type="breve" role="tab">
+            <span class="rwc-seg-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+            <span class="rwc-seg-label">Breve</span>
+          </button>
+          <button type="button" class="rwc-seg-btn" data-type="normal" role="tab">
+            <span class="rwc-seg-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="12" r="1.2" fill="currentColor"></circle></svg></span>
+            <span class="rwc-seg-label">Normal</span>
+          </button>
+          <button type="button" class="rwc-seg-btn" data-type="detalhado" role="tab">
+            <span class="rwc-seg-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg></span>
+            <span class="rwc-seg-label">Detalhado</span>
+          </button>
         </div>
 
         <div id="rwc-status" class="rwc-status rwc-hidden"></div>
@@ -245,10 +418,42 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
         <section id="rwc-result" class="rwc-result rwc-hidden">
           <div class="rwc-result-header">
             <span id="rwc-result-tag" class="rwc-result-tag">Resumo</span>
-            <button type="button" class="rwc-copy-btn" id="rwc-copy">Copiar</button>
+            <button type="button" class="rwc-copy-btn" id="rwc-copy">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>Copiar</span>
+            </button>
           </div>
           <div id="rwc-result-text" class="rwc-result-text"></div>
         </section>
+      </div>
+
+      <div class="rwc-footer">
+        <svg class="rwc-footer-wave" viewBox="0 0 380 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="rwcWaveSoft" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#f3edff"></stop>
+              <stop offset="0.5" stop-color="#e7dcff"></stop>
+              <stop offset="1" stop-color="#f5efff"></stop>
+            </linearGradient>
+            <linearGradient id="rwcWaveLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#b58cff"></stop>
+              <stop offset="0.5" stop-color="#7c3aed"></stop>
+              <stop offset="1" stop-color="#b58cff"></stop>
+            </linearGradient>
+          </defs>
+          <path d="M0 54 C48 22 88 22 137 52 C186 82 227 84 274 55 C319 27 348 27 380 45 L380 100 L0 100 Z" fill="url(#rwcWaveSoft)" opacity="0.82"></path>
+          <path d="M0 54 C48 22 88 22 137 52 C186 82 227 84 274 55 C319 27 348 27 380 45" fill="none" stroke="url(#rwcWaveLine)" stroke-width="1.35" opacity="0.78"></path>
+          <path d="M0 66 C45 42 82 40 126 63 C174 88 213 89 258 64 C302 39 339 38 380 58" fill="none" stroke="#a78bfa" stroke-width="1.05" opacity="0.42"></path>
+          <path d="M0 43 C39 67 78 72 119 52 C162 31 203 29 245 51 C290 75 331 76 380 54" fill="none" stroke="#c4b5fd" stroke-width="0.9" opacity="0.5"></path>
+          <circle cx="47" cy="67" r="2.2" fill="#7c3aed" opacity="0.65"></circle>
+          <circle cx="325" cy="38" r="2" fill="#8b5cf6" opacity="0.45"></circle>
+        </svg>
+        <div class="rwc-footer-caption">
+          <span class="rwc-footer-line"></span>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M12 2l1.8 5.6L19 9l-5.2 1.4L12 16l-1.8-5.6L5 9l5.2-1.4L12 2Z"></path></svg>
+          <span>criado por Kauã</span>
+          <span class="rwc-footer-line"></span>
+        </div>
       </div>
     `;
     document.body.appendChild(painel);
@@ -292,10 +497,19 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   }
 
   async function inicializarConfiguracoes() {
+    if (!extensaoValida()) {
+      mostrarStatusConfig("A extensão foi atualizada. Recarregue esta página (F5) para continuar.", false);
+      painelEl.querySelector("#rwc-settings").classList.remove("rwc-hidden");
+      return;
+    }
     const campo = painelEl.querySelector("#rwc-gemini-key");
-    const { geminiKey } = await chrome.storage.local.get("geminiKey");
-    if (geminiKey) {
-      campo.value = geminiKey;
+    try {
+      const { geminiKey } = await chrome.storage.local.get("geminiKey");
+      if (geminiKey) {
+        campo.value = geminiKey;
+        return;
+      }
+    } catch (_) {
       return;
     }
     const resposta = await chrome.runtime
@@ -320,9 +534,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     const campo = painelEl.querySelector("#rwc-gemini-key");
     const valor = campo.value.trim();
     if (!valor) return;
-    await chrome.storage.local.set({ geminiKey: valor });
-    mostrarStatusConfig("Chave salva!", true);
-    setTimeout(() => painelEl.querySelector("#rwc-settings-status").classList.add("rwc-hidden"), 2000);
+    try {
+      await chrome.storage.local.set({ geminiKey: valor });
+      mostrarStatusConfig("Chave salva!", true);
+      setTimeout(() => painelEl.querySelector("#rwc-settings-status").classList.add("rwc-hidden"), 2000);
+    } catch (_) {
+      mostrarStatusConfig("A extensão foi atualizada. Recarregue esta página (F5) e tente de novo.", false);
+    }
   }
 
   function mostrarStatus(tipo, mensagem) {
@@ -356,7 +574,18 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
     esconderStatus();
 
-    const { geminiKey } = await chrome.storage.local.get("geminiKey");
+    if (!extensaoValida()) {
+      mostrarStatus("error", "A extensão foi atualizada. Recarregue esta página (F5) e tente de novo.");
+      return;
+    }
+
+    let geminiKey;
+    try {
+      ({ geminiKey } = await chrome.storage.local.get("geminiKey"));
+    } catch (_) {
+      mostrarStatus("error", "A extensão foi atualizada. Recarregue esta página (F5) e tente de novo.");
+      return;
+    }
     if (!geminiKey) {
       painelEl.querySelector("#rwc-settings").classList.remove("rwc-hidden");
       mostrarStatus("error", "Configure a chave da API do Gemini primeiro.");
@@ -367,6 +596,8 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     try {
       mostrarStatus("loading", "Lendo a conversa da tela...");
       const mensagens = await carregarConversaCompleta();
+      if (tipo !== tipoEmAndamento) return; // agente trocou de tipo enquanto lia a tela
+
       if (!mensagens.length) {
         throw new Error(
           "Nenhuma mensagem encontrada nesta tela. Abra um atendimento e tente novamente."
@@ -379,40 +610,40 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
         temAudio ? "Baixando os áudios e gerando o resumo (pode demorar um pouco mais)..." : "Gerando o resumo..."
       );
       const parts = montarPartesPrompt(tipo, mensagens);
-      const resposta = await chrome.runtime.sendMessage({
-        type: "rwc-gerar-resumo",
-        apiKey: geminiKey,
-        parts,
-      });
 
-      if (tipo !== tipoEmAndamento) return; // agente trocou de tipo antes da resposta chegar
-      if (!resposta || !resposta.ok) {
-        throw new Error((resposta && resposta.error) || "Ocorreu um erro inesperado.");
-      }
-
-      esconderStatus();
-      painelEl.querySelector("#rwc-result-tag").textContent = ROTULOS_TIPO[tipo];
-      const resultText = painelEl.querySelector("#rwc-result-text");
-      resultText.innerHTML = formatarSaida(resposta.text);
-      resultText.dataset.raw = resposta.text;
-      painelEl.querySelector("#rwc-result").classList.remove("rwc-hidden");
+      // Handoff: a partir daqui a geração roda inteira no background.js e
+      // fica salva em storage. Fechar esta aba não interrompe mais nada —
+      // se a aba/painel continuar aberto, o storage.onChanged acima atualiza
+      // a tela; se não, o resultado fica pronto para quando reabrir a mesma
+      // conversa (ou dispara uma notificação do sistema).
+      chrome.runtime
+        .sendMessage({
+          type: "rwc-gerar-resumo",
+          apiKey: geminiKey,
+          parts,
+          tipo,
+          url: location.href,
+          solicitacaoId: gerarSolicitacaoId(),
+        })
+        .catch(() => {
+          /* aba pode fechar aqui sem problema — resultado chega via storage */
+        });
     } catch (erro) {
       if (tipo !== tipoEmAndamento) return;
       mostrarStatus("error", erro.message || "Ocorreu um erro inesperado.");
-    } finally {
-      if (tipo === tipoEmAndamento) definirCarregando(false);
+      definirCarregando(false);
     }
   }
 
   async function copiarResultado() {
-    const resultText = painelEl.querySelector("#rwc-result-text");
-    const texto = resultText.dataset.raw || resultText.textContent;
+    const resultSection = painelEl.querySelector("#rwc-result");
+    const texto = resultSection.dataset.raw || painelEl.querySelector("#rwc-result-text").textContent;
     try {
       await navigator.clipboard.writeText(texto);
-      const btn = painelEl.querySelector("#rwc-copy");
-      const original = btn.textContent;
-      btn.textContent = "Copiado!";
-      setTimeout(() => (btn.textContent = original), 1500);
+      const label = painelEl.querySelector("#rwc-copy span");
+      const original = label.textContent;
+      label.textContent = "Copiado!";
+      setTimeout(() => (label.textContent = original), 1500);
     } catch (_) {
     }
   }
@@ -482,12 +713,23 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
       esconderStatus();
       painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => b.classList.remove("rwc-seg-btn--active"));
+      // A geração antiga (se houver) virou responsabilidade só do background;
+      // esta tela não deve ficar travada esperando por ela.
+      definirCarregando(false);
     }
+    restaurarUltimoResumoSeCorresponder();
   }
 
   function iniciar() {
     posicionarBotao();
-    setInterval(() => {
+    restaurarUltimoResumoSeCorresponder();
+    const intervalo = setInterval(() => {
+      if (!extensaoValida()) {
+        // Extensão foi recarregada com esta aba já aberta — este content
+        // script ficou órfão, não tem mais nada útil a fazer sem um F5.
+        clearInterval(intervalo);
+        return;
+      }
       verificarTrocaDeUrl();
       posicionarBotao();
     }, 1000);

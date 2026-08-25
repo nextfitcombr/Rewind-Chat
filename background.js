@@ -73,6 +73,39 @@ async function resolverPartes(partes) {
   );
 }
 
+function aguardarMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 503 (modelo sobrecarregado) e 429 (limite de uso) costumam ser picos
+// transitórios do lado do Gemini — tenta de novo com backoff em vez de
+// obrigar o usuário a refazer a leitura da tela + download de áudio.
+async function chamarGeminiComRetry(url, body, tentativas = 4) {
+  for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (resp.ok) return resp;
+
+    const status = resp.status;
+    const retentavel = status === 503 || status === 429 || status >= 500;
+    if (!retentavel || tentativa === tentativas) {
+      const corpo = await resp.text().catch(() => "");
+      let dica = "";
+      if (status === 400) dica = " (chave da API do Gemini inválida)";
+      if (status === 429) dica = " (limite de uso da IA atingido, tente novamente em instantes)";
+      if (status === 503) dica = " (modelo sobrecarregado no momento, tente novamente em instantes)";
+      throw new Error(`A IA retornou ${status}${dica}. ${corpo}`);
+    }
+
+    const espera = Math.min(2000 * 2 ** (tentativa - 1), 15000);
+    console.warn(`[rwc] Gemini retornou ${status}, tentando de novo em ${espera}ms (tentativa ${tentativa}/${tentativas})`);
+    await aguardarMs(espera);
+  }
+}
+
 async function gerarResumoIA(apiKey, partes) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
     apiKey
@@ -80,23 +113,10 @@ async function gerarResumoIA(apiKey, partes) {
 
   const partesResolvidas = await resolverPartes(partes);
 
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: partesResolvidas }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
-    }),
+  const resp = await chamarGeminiComRetry(url, {
+    contents: [{ parts: partesResolvidas }],
+    generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
   });
-
-  if (!resp.ok) {
-    const corpo = await resp.text().catch(() => "");
-    let dica = "";
-    if (resp.status === 400) dica = " (chave da API do Gemini inválida)";
-    if (resp.status === 429)
-      dica = " (limite de uso da IA atingido, tente novamente em instantes)";
-    throw new Error(`A IA retornou ${resp.status}${dica}. ${corpo}`);
-  }
 
   const dados = await resp.json();
   const cand = dados.candidates && dados.candidates[0];
@@ -116,6 +136,87 @@ async function gerarResumoIA(apiKey, partes) {
   return texto;
 }
 
+const ROTULOS_TIPO = {
+  breve: "Resumo breve",
+  normal: "Resumo normal",
+  detalhado: "Resumo detalhado",
+};
+
+function salvarUltimoResumo(dados) {
+  return chrome.storage.local.set({ rwcUltimoResumo: dados });
+}
+
+function notificar(titulo, mensagem) {
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icons/icon128.png",
+    title: titulo,
+    message: mensagem,
+  });
+}
+
+// O MV3 pode encerrar o service worker por inatividade (~30s) mesmo com um
+// fetch pendente, dependendo da versão do Chrome. Qualquer chamada a uma
+// API da extensão reseta esse timer, então mantemos um "pulso" periódico
+// enquanto a geração estiver rodando.
+function manterServiceWorkerAtivo() {
+  const intervalo = setInterval(() => {
+    chrome.storage.local.get("rwcKeepAlive", () => void chrome.runtime.lastError);
+  }, 15000);
+  return () => clearInterval(intervalo);
+}
+
+// A partir do momento em que a mensagem chega aqui, a geração roda até o
+// fim mesmo que a aba/conversa de origem seja fechada: o resultado (ou
+// erro) é persistido em storage, e o content script — se ainda estiver
+// aberto na mesma conversa — atualiza a tela via chrome.storage.onChanged.
+// Se a aba já tiver fechado, o sendResponse simplesmente falha em silêncio;
+// o trabalho em si não é interrompido por isso.
+async function processarGeracaoDeResumo(mensagem, sendResponse) {
+  const contexto = {
+    status: "gerando",
+    url: mensagem.url || "",
+    tipo: mensagem.tipo || "",
+    solicitacaoId: mensagem.solicitacaoId || "",
+    atualizadoEm: Date.now(),
+  };
+  console.log("[rwc] geração iniciada", contexto.tipo, contexto.url);
+  await salvarUltimoResumo(contexto);
+
+  const pararKeepAlive = manterServiceWorkerAtivo();
+  try {
+    const apiKey = mensagem.apiKey || (await obterChaveSalva());
+    if (!apiKey) {
+      const erroDados = {
+        ...contexto,
+        status: "erro",
+        erro: "Nenhuma chave de API do Gemini configurada.",
+        atualizadoEm: Date.now(),
+      };
+      await salvarUltimoResumo(erroDados);
+      console.warn("[rwc] sem chave de API configurada");
+      sendResponse({ ok: false, error: erroDados.erro });
+      return;
+    }
+
+    const texto = await gerarResumoIA(apiKey, mensagem.parts);
+    const prontoDados = { ...contexto, status: "pronto", texto, atualizadoEm: Date.now() };
+    await salvarUltimoResumo(prontoDados);
+    console.log("[rwc] geração concluída", contexto.tipo, contexto.url);
+    notificar("Rewind Chat", `${ROTULOS_TIPO[mensagem.tipo] || "Resumo"} pronto.`);
+    sendResponse({ ok: true, text: texto });
+  } catch (erro) {
+    const erroMsg = erro.message || "Ocorreu um erro inesperado.";
+    const erroDados = { ...contexto, status: "erro", erro: erroMsg, atualizadoEm: Date.now() };
+    await salvarUltimoResumo(erroDados);
+    console.error("[rwc] geração falhou", erro);
+    notificar("Rewind Chat — erro ao gerar resumo", erroMsg);
+    sendResponse({ ok: false, error: erroMsg });
+  } finally {
+    pararKeepAlive();
+  }
+}
+
 chrome.runtime.onMessage.addListener((mensagem, _sender, sendResponse) => {
   if (mensagem?.type === "rwc-obter-config-inicial") {
     (async () => {
@@ -127,25 +228,13 @@ chrome.runtime.onMessage.addListener((mensagem, _sender, sendResponse) => {
   }
 
   if (mensagem?.type === "rwc-gerar-resumo") {
-    (async () => {
+    processarGeracaoDeResumo(mensagem, (resposta) => {
       try {
-        const apiKey = mensagem.apiKey || (await obterChaveSalva());
-        if (!apiKey) {
-          sendResponse({
-            ok: false,
-            error: "Nenhuma chave de API do Gemini configurada.",
-          });
-          return;
-        }
-        const texto = await gerarResumoIA(apiKey, mensagem.parts);
-        sendResponse({ ok: true, text: texto });
-      } catch (erro) {
-        sendResponse({
-          ok: false,
-          error: erro.message || "Ocorreu um erro inesperado.",
-        });
+        sendResponse(resposta);
+      } catch (_) {
+        // Aba de origem fechada — o resultado já está salvo em storage.
       }
-    })();
+    });
     return true;
   }
 
