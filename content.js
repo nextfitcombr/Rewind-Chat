@@ -49,6 +49,18 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   let tipoEmAndamento = null;
   let urlAtual = location.href;
 
+  // Balão flutuante: só existe pra dar um status visual quando o painel
+  // está minimizado durante uma geração (nada disso aparece com o painel
+  // aberto — lá o status já é mostrado no próprio painel). Diferente do
+  // resto do painel, o balão acompanha a geração pelo `urlGeracaoAcompanhada`
+  // em vez da URL atual — assim ele continua visível mesmo se o agente
+  // trocar de conversa enquanto o resumo está sendo gerado.
+  let balaoEl = null;
+  let balaoTimer = null;
+  let estadoAtual = null; // null | "gerando" | "pronto" | "erro"
+  let balaoUltimoEstadoMostrado = null;
+  let urlGeracaoAcompanhada = null;
+
   function limparTexto(txt) {
     return (txt || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
   }
@@ -295,9 +307,11 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
   // Se o background morrer no meio da geração (ex: service worker
   // encerrado pelo Chrome), o storage fica travado em "gerando" para
-  // sempre. Depois desse tempo sem atualização, tratamos como falho em
-  // vez de mostrar um carregamento infinito.
-  const GERANDO_TIMEOUT_MS = 90000;
+  // sempre. O background atualiza `atualizadoEm` a cada ~15s enquanto está
+  // vivo (heartbeat), então esse tempo mede "sem sinal de vida", não
+  // "desde o início" — por isso pode ficar folgado sem risco de interromper
+  // uma geração longa (vários áudios + retries) que ainda está rodando.
+  const GERANDO_TIMEOUT_MS = 120000;
 
   function exibirResumo(dados, opcoes) {
     if (!dados) return;
@@ -320,7 +334,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       mostrarStatus("error", "A geração anterior não terminou (a extensão pode ter sido reiniciada). Tente novamente.");
     } else if (dados.status === "gerando") {
       definirCarregando(true);
-      mostrarStatus("loading", "Gerando o resumo...");
+      mostrarStatus("liberado", "Já pode trocar de tela — gerando o resumo em segundo plano...");
+      // Garante que o balão passe a acompanhar esta geração mesmo quando ela
+      // não foi iniciada por esta função (ex: painel forçado a abrir ao
+      // carregar a página com uma geração já em andamento nesta conversa).
+      urlGeracaoAcompanhada = dados.url;
+      atualizarBalaoDaGeracaoAcompanhada(dados);
     } else if (dados.status === "pronto") {
       definirCarregando(false);
       painelEl.querySelector("#rwc-result-tag").textContent = ROTULOS_TIPO[dados.tipo] || "Resumo";
@@ -331,6 +350,28 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       definirCarregando(false);
       mostrarStatus("error", dados.erro || "Ocorreu um erro inesperado.");
     }
+  }
+
+  // Ao contrário de exibirResumo (que só reage se a atualização pertencer à
+  // conversa ATUAL), o balão acompanha a geração que esta aba iniciou pela
+  // URL guardada em urlGeracaoAcompanhada — assim ele continua aparecendo
+  // e reagindo (pontinhos → check/erro) mesmo depois de o agente trocar de
+  // contato/conversa.
+  function atualizarBalaoDaGeracaoAcompanhada(dados) {
+    if (!dados || !urlGeracaoAcompanhada || dados.url !== urlGeracaoAcompanhada) return;
+
+    if (dados.status === "gerando" && Date.now() - (dados.atualizadoEm || 0) > GERANDO_TIMEOUT_MS) {
+      estadoAtual = "erro";
+    } else if (dados.status === "gerando") {
+      estadoAtual = "gerando";
+    } else if (dados.status === "pronto") {
+      estadoAtual = "pronto";
+    } else if (dados.status === "erro") {
+      estadoAtual = "erro";
+    } else {
+      return;
+    }
+    atualizarBalao();
   }
 
   // Se a extensão for recarregada (chrome://extensions) com esta aba já
@@ -356,7 +397,9 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
   chrome.storage.onChanged.addListener((mudancas, area) => {
     if (area !== "local" || !mudancas.rwcUltimoResumo) return;
-    exibirResumo(mudancas.rwcUltimoResumo.newValue);
+    const dados = mudancas.rwcUltimoResumo.newValue;
+    atualizarBalaoDaGeracaoAcompanhada(dados);
+    exibirResumo(dados);
   });
 
   function criarPainel() {
@@ -383,7 +426,10 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
           <button type="button" class="rwc-icon-btn" id="rwc-settings-toggle" title="Configurações" aria-label="Configurações">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           </button>
-          <button type="button" class="rwc-icon-btn" id="rwc-close" title="Fechar" aria-label="Fechar">
+          <button type="button" class="rwc-icon-btn" id="rwc-minimize" title="Minimizar" aria-label="Minimizar">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <button type="button" class="rwc-icon-btn" id="rwc-reset" title="Fechar e limpar resumo" aria-label="Fechar e limpar resumo">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
@@ -458,7 +504,8 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     `;
     document.body.appendChild(painel);
 
-    painel.querySelector("#rwc-close").addEventListener("click", fecharPainel);
+    painel.querySelector("#rwc-minimize").addEventListener("click", fecharPainel);
+    painel.querySelector("#rwc-reset").addEventListener("click", resetarPainel);
     painel.querySelector("#rwc-settings-toggle").addEventListener("click", alternarConfiguracoes);
     painel.querySelector("#rwc-save-key").addEventListener("click", salvarChave);
     painel.querySelector("#rwc-copy").addEventListener("click", copiarResultado);
@@ -476,14 +523,126 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return painelEl;
   }
 
+  function criarBalao() {
+    const balao = document.createElement("button");
+    balao.type = "button";
+    balao.id = "rwc-bubble";
+    balao.className = "rwc-bubble rwc-hidden";
+    balao.title = "Rewind Chat";
+    balao.setAttribute("aria-label", "Rewind Chat — status do resumo");
+    balao.innerHTML = `
+      <span class="rwc-bubble-dots"><span></span><span></span><span></span></span>
+      <svg class="rwc-bubble-check" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+      <svg class="rwc-bubble-erro" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="7.5" x2="12" y2="13"></line><line x1="12" y1="16.5" x2="12.01" y2="16.5"></line></svg>
+    `;
+    balao.addEventListener("click", () => {
+      // Se o resumo acompanhado pelo balão for de outra conversa (o agente
+      // trocou de tela enquanto gerava), volta pra ela em vez de abrir um
+      // painel vazio na conversa atual.
+      if (urlGeracaoAcompanhada && urlGeracaoAcompanhada !== location.href) {
+        location.href = urlGeracaoAcompanhada;
+        return;
+      }
+      abrirPainel();
+    });
+    document.body.appendChild(balao);
+    return balao;
+  }
+
+  function garantirBalao() {
+    if (!balaoEl || !balaoEl.isConnected) balaoEl = criarBalao();
+    return balaoEl;
+  }
+
+  function esconderBalao() {
+    if (balaoTimer) {
+      clearTimeout(balaoTimer);
+      balaoTimer = null;
+    }
+    if (balaoEl) {
+      balaoEl.classList.add("rwc-hidden");
+      balaoEl.classList.remove("rwc-bubble--carregando", "rwc-bubble--sucesso", "rwc-bubble--erro");
+    }
+  }
+
+  // O balão só aparece com o painel minimizado (com o painel aberto o
+  // status já é mostrado nele). Enquanto "gerando" fica com os pontinhos;
+  // ao terminar (pronto/erro) troca o ícone uma única vez e some sozinho
+  // depois de alguns segundos.
+  function atualizarBalao() {
+    const painelAberto = !!(painelEl && painelEl.classList.contains("rwc-panel--open"));
+    if (painelAberto || !estadoAtual) {
+      esconderBalao();
+      return;
+    }
+
+    const balao = garantirBalao();
+    balao.classList.remove("rwc-hidden");
+
+    if (estadoAtual === "gerando") {
+      if (balaoTimer) {
+        clearTimeout(balaoTimer);
+        balaoTimer = null;
+      }
+      balao.classList.remove("rwc-bubble--sucesso", "rwc-bubble--erro");
+      balao.classList.add("rwc-bubble--carregando");
+      balaoUltimoEstadoMostrado = "gerando";
+      return;
+    }
+
+    if (balaoUltimoEstadoMostrado === estadoAtual) return;
+    balaoUltimoEstadoMostrado = estadoAtual;
+
+    balao.classList.remove("rwc-bubble--carregando");
+    balao.classList.toggle("rwc-bubble--sucesso", estadoAtual === "pronto");
+    balao.classList.toggle("rwc-bubble--erro", estadoAtual === "erro");
+
+    if (balaoTimer) clearTimeout(balaoTimer);
+    balaoTimer = setTimeout(() => {
+      estadoAtual = null;
+      urlGeracaoAcompanhada = null;
+      balaoTimer = null;
+      esconderBalao();
+    }, estadoAtual === "pronto" ? 2200 : 3200);
+  }
+
   function abrirPainel() {
     const painel = garantirPainel();
     painel.classList.add("rwc-panel--open");
     inicializarConfiguracoes();
+    atualizarBalao();
   }
 
   function fecharPainel() {
     if (painelEl) painelEl.classList.remove("rwc-panel--open");
+    atualizarBalao();
+  }
+
+  // Diferente de minimizar (fecharPainel), o reset apaga o resumo salvo
+  // desta conversa: ao voltar para ela depois, a extensão não deve reabrir
+  // sozinha mostrando o resumo antigo — fica como se nada tivesse sido
+  // gerado ainda.
+  async function resetarPainel() {
+    tipoEmAndamento = null;
+    estadoAtual = null;
+    urlGeracaoAcompanhada = null;
+    fecharPainel();
+    if (painelEl) {
+      painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
+      painelEl.querySelector("#rwc-result").dataset.raw = "";
+      esconderStatus();
+      painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => b.classList.remove("rwc-seg-btn--active"));
+      definirCarregando(false);
+    }
+    if (!extensaoValida()) return;
+    try {
+      const { rwcUltimoResumo } = await chrome.storage.local.get("rwcUltimoResumo");
+      if (pertenceAConversaAtual(rwcUltimoResumo)) {
+        await chrome.storage.local.remove("rwcUltimoResumo");
+      }
+    } catch (_) {
+      /* contexto da extensão invalidado — ignora */
+    }
   }
 
   function alternarPainel() {
@@ -543,11 +702,20 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
   }
 
+  const ICONE_STATUS_AVISO =
+    '<svg class="rwc-status-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+  const ICONE_STATUS_LIBERADO =
+    '<svg class="rwc-status-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
+
   function mostrarStatus(tipo, mensagem) {
     const el = painelEl.querySelector("#rwc-status");
     el.className = `rwc-status rwc-status--${tipo}`;
     if (tipo === "loading") {
       el.innerHTML = `<span class="rwc-spinner"></span><span>${mensagem}</span>`;
+    } else if (tipo === "aviso") {
+      el.innerHTML = `${ICONE_STATUS_AVISO}<span>${mensagem}</span>`;
+    } else if (tipo === "liberado") {
+      el.innerHTML = `${ICONE_STATUS_LIBERADO}<span>${mensagem}</span>`;
     } else {
       el.textContent = mensagem;
     }
@@ -593,8 +761,15 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
 
     definirCarregando(true);
+    estadoAtual = "gerando";
+    urlGeracaoAcompanhada = location.href;
+    balaoUltimoEstadoMostrado = "gerando";
+    atualizarBalao();
     try {
-      mostrarStatus("loading", "Lendo a conversa da tela...");
+      // A leitura rola a tela do próprio atendimento para coletar as
+      // mensagens; trocar de contato/conversa agora interrompe a leitura,
+      // então avisamos claramente o agente para não trocar de tela ainda.
+      mostrarStatus("aviso", "Lendo a conversa da tela... Não troque de contato até a leitura terminar.");
       const mensagens = await carregarConversaCompleta();
       if (tipo !== tipoEmAndamento) return; // agente trocou de tipo enquanto lia a tela
 
@@ -604,18 +779,14 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
         );
       }
       const temAudio = mensagens.some((m) => m.tipo === "audio");
-
-      mostrarStatus(
-        "loading",
-        temAudio ? "Baixando os áudios e gerando o resumo (pode demorar um pouco mais)..." : "Gerando o resumo..."
-      );
       const parts = montarPartesPrompt(tipo, mensagens);
 
       // Handoff: a partir daqui a geração roda inteira no background.js e
       // fica salva em storage. Fechar esta aba não interrompe mais nada —
       // se a aba/painel continuar aberto, o storage.onChanged acima atualiza
       // a tela; se não, o resultado fica pronto para quando reabrir a mesma
-      // conversa (ou dispara uma notificação do sistema).
+      // conversa (ou dispara uma notificação do sistema). A partir daqui já
+      // é seguro trocar de tela/contato.
       chrome.runtime
         .sendMessage({
           type: "rwc-gerar-resumo",
@@ -628,10 +799,19 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
         .catch(() => {
           /* aba pode fechar aqui sem problema — resultado chega via storage */
         });
+
+      mostrarStatus(
+        "liberado",
+        temAudio
+          ? "Leitura concluída — já pode trocar de tela. Baixando os áudios e gerando o resumo em segundo plano..."
+          : "Leitura concluída — já pode trocar de tela. Gerando o resumo em segundo plano..."
+      );
     } catch (erro) {
       if (tipo !== tipoEmAndamento) return;
       mostrarStatus("error", erro.message || "Ocorreu um erro inesperado.");
       definirCarregando(false);
+      estadoAtual = "erro";
+      atualizarBalao();
     }
   }
 
@@ -709,6 +889,9 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     if (location.href === urlAtual) return;
     urlAtual = location.href;
     tipoEmAndamento = null;
+    // estadoAtual/urlGeracaoAcompanhada NÃO são resetados aqui de propósito:
+    // se uma geração estiver em andamento, o balão flutuante deve continuar
+    // acompanhando ela mesmo que o agente troque de contato/conversa.
     if (painelEl) {
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
       esconderStatus();
@@ -716,6 +899,14 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       // A geração antiga (se houver) virou responsabilidade só do background;
       // esta tela não deve ficar travada esperando por ela.
       definirCarregando(false);
+    }
+    if (estadoAtual === "gerando") {
+      // Trocou de contato com uma geração rolando: minimiza sozinho em vez
+      // de deixar o painel aberto "vazio" na conversa nova — o balão
+      // flutuante assume o status até o resumo terminar.
+      fecharPainel(); // já chama atualizarBalao()
+    } else {
+      atualizarBalao();
     }
     restaurarUltimoResumoSeCorresponder();
   }

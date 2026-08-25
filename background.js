@@ -159,9 +159,37 @@ function notificar(titulo, mensagem) {
 // fetch pendente, dependendo da versão do Chrome. Qualquer chamada a uma
 // API da extensão reseta esse timer, então mantemos um "pulso" periódico
 // enquanto a geração estiver rodando.
-function manterServiceWorkerAtivo() {
+//
+// Esse pulso também serve de heartbeat pro content script: sem ele,
+// `atualizadoEm` ficaria travado no horário em que a geração começou, e uma
+// conversa com vários áudios (download + retries no Gemini podem passar de
+// 1-2 minutos) faria o content script achar que a geração morreu mesmo
+// estando tudo normal. Atualizando `atualizadoEm` a cada pulso, o timeout
+// do lado do content script passa a medir "tempo desde o último sinal de
+// vida" em vez de "tempo desde o início".
+// `aindaGerando` é checada antes de CADA operação assíncrona de storage
+// (não só uma vez no início do tick) porque a leitura e a escrita do
+// heartbeat não são atômicas: se a geração terminar (e gravar o resultado
+// final) bem no meio dessas duas chamadas, sem essa checagem de novo logo
+// antes do set() o heartbeat reescreveria "gerando" por cima do resultado
+// já pronto/com erro.
+function manterServiceWorkerAtivo(contexto, aindaGerando) {
   const intervalo = setInterval(() => {
     chrome.storage.local.get("rwcKeepAlive", () => void chrome.runtime.lastError);
+    if (!aindaGerando()) return;
+    chrome.storage.local.get("rwcUltimoResumo", ({ rwcUltimoResumo }) => {
+      if (
+        !aindaGerando() ||
+        !rwcUltimoResumo ||
+        rwcUltimoResumo.status !== "gerando" ||
+        rwcUltimoResumo.solicitacaoId !== contexto.solicitacaoId
+      ) {
+        return;
+      }
+      chrome.storage.local.set({
+        rwcUltimoResumo: { ...rwcUltimoResumo, atualizadoEm: Date.now() },
+      });
+    });
   }, 15000);
   return () => clearInterval(intervalo);
 }
@@ -183,10 +211,12 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
   console.log("[rwc] geração iniciada", contexto.tipo, contexto.url);
   await salvarUltimoResumo(contexto);
 
-  const pararKeepAlive = manterServiceWorkerAtivo();
+  let finalizado = false;
+  const pararKeepAlive = manterServiceWorkerAtivo(contexto, () => !finalizado);
   try {
     const apiKey = mensagem.apiKey || (await obterChaveSalva());
     if (!apiKey) {
+      finalizado = true;
       const erroDados = {
         ...contexto,
         status: "erro",
@@ -200,12 +230,14 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
     }
 
     const texto = await gerarResumoIA(apiKey, mensagem.parts);
+    finalizado = true;
     const prontoDados = { ...contexto, status: "pronto", texto, atualizadoEm: Date.now() };
     await salvarUltimoResumo(prontoDados);
     console.log("[rwc] geração concluída", contexto.tipo, contexto.url);
     notificar("Rewind Chat", `${ROTULOS_TIPO[mensagem.tipo] || "Resumo"} pronto.`);
     sendResponse({ ok: true, text: texto });
   } catch (erro) {
+    finalizado = true;
     const erroMsg = erro.message || "Ocorreu um erro inesperado.";
     const erroDados = { ...contexto, status: "erro", erro: erroMsg, atualizadoEm: Date.now() };
     await salvarUltimoResumo(erroDados);
