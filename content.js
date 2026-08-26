@@ -227,7 +227,9 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   }
 
   function formatarSaida(texto) {
-    return escaparHtml(texto).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    return escaparHtml(texto)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>");
   }
 
   /* ========================================================================
