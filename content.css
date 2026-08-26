@@ -51,7 +51,20 @@
   justify-content: center;
   margin-right: 8px;
   padding: 0;
+  position: relative;
   width: 32px;
+}
+#rwc-launcher-button.rwc-inline-btn.rwc-inline-btn--pendente::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--rwc-erro);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 #rwc-launcher-button.rwc-inline-btn svg {
   fill: currentColor;
@@ -108,52 +121,44 @@
 .rwc-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 .rwc-brand-mark {
-  width: 26px;
-  height: 22px;
+  width: 27px;
+  height: 27px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--rwc-purple);
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--rwc-purple) 0%, var(--rwc-purple-dark) 100%);
+  box-shadow: 0 2px 6px rgba(76, 29, 149, 0.25);
 }
 .rwc-brand-mark svg {
-  width: 100%;
-  height: 100%;
+  width: 60%;
+  height: 60%;
   display: block;
 }
 .rwc-brand-copy {
   display: flex;
-  flex-direction: row;
   align-items: baseline;
-  gap: 7px;
-  line-height: 1;
+  gap: 3px;
   min-width: 0;
 }
-.rwc-brand-script {
-  position: relative;
-  display: inline-block;
-  width: fit-content;
-  font-family: "Segoe Script", "Brush Script MT", "Lucida Handwriting", cursive;
-  font-size: 28px;
+.rwc-brand-name-purple,
+.rwc-brand-name-gray {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.rwc-brand-name-purple {
   color: var(--rwc-purple);
-  line-height: 1;
 }
-.rwc-brand-spark {
-  position: absolute;
-  top: -8px;
-  right: -16px;
-  color: var(--rwc-magenta);
-}
-.rwc-brand-bold {
-  font-size: 22px;
-  font-weight: 400;
-  letter-spacing: 0;
-  color: var(--rwc-text-faint);
-  line-height: 1;
+.rwc-brand-name-gray {
+  color: var(--rwc-text-soft);
 }
 .rwc-header-actions {
   display: flex;
@@ -336,19 +341,56 @@
   border-color: var(--rwc-erro-bd);
 }
 .rwc-status--aviso {
-  background: var(--rwc-amber-bg);
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
   color: var(--rwc-amber);
-  border-color: var(--rwc-amber);
   font-weight: 600;
 }
-.rwc-status--liberado {
-  background: #eafaf1;
-  color: var(--rwc-success);
-  border-color: var(--rwc-success);
+.rwc-status--gerando {
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
+  color: var(--rwc-text-faint);
   font-weight: 600;
 }
 .rwc-status-icon {
   flex-shrink: 0;
+}
+
+.rwc-dots {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  width: 0;
+  animation: rwc-dots-grow 1.4s infinite;
+}
+.rwc-dots::after {
+  content: "...";
+}
+/* Cada par de porcentagens iguais (ex: 24%/25%) segura a largura parada e
+   troca quase instantaneamente pro próximo valor — dá o efeito de "." "." "."
+   aparecendo um de cada vez, sem depender de steps()/jump-term do CSS. */
+@keyframes rwc-dots-grow {
+  0%,
+  24% {
+    width: 0;
+  }
+  25%,
+  49% {
+    width: 0.34em;
+  }
+  50%,
+  74% {
+    width: 0.68em;
+  }
+  75%,
+  99% {
+    width: 1em;
+  }
+  100% {
+    width: 0;
+  }
 }
 
 .rwc-spinner {
@@ -606,6 +648,7 @@
   #rwc-panel,
   #rwc-launcher-button,
   .rwc-spinner,
+  .rwc-dots,
   .rwc-bubble-dots span,
   #rwc-bubble .rwc-bubble-check,
   #rwc-bubble .rwc-bubble-erro {

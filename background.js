@@ -80,7 +80,12 @@ function aguardarMs(ms) {
 // 503 (modelo sobrecarregado) e 429 (limite de uso) costumam ser picos
 // transitórios do lado do Gemini — tenta de novo com backoff em vez de
 // obrigar o usuário a refazer a leitura da tela + download de áudio.
-async function chamarGeminiComRetry(url, body, tentativas = 4) {
+//
+// Reduzimos pra 3 tentativas com teto de 8s (era 4 tentativas / 15s): no
+// pior caso isso corta o tempo perdido em espera de ~29s pra ~10s. Ainda dá
+// resiliência pra picos curtos sem deixar o agente esperando quase meio
+// minuto só de backoff quando o modelo está sobrecarregado.
+async function chamarGeminiComRetry(url, body, onTentativa, tentativas = 3) {
   for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
     const resp = await fetch(url, {
       method: "POST",
@@ -100,23 +105,33 @@ async function chamarGeminiComRetry(url, body, tentativas = 4) {
       throw new Error(`A IA retornou ${status}${dica}. ${corpo}`);
     }
 
-    const espera = Math.min(2000 * 2 ** (tentativa - 1), 15000);
+    const espera = Math.min(2000 * 2 ** (tentativa - 1), 8000);
     console.warn(`[rwc] Gemini retornou ${status}, tentando de novo em ${espera}ms (tentativa ${tentativa}/${tentativas})`);
+    if (onTentativa) onTentativa(tentativa + 1, tentativas);
     await aguardarMs(espera);
   }
 }
 
-async function gerarResumoIA(apiKey, partes) {
+async function gerarResumoIA(apiKey, partes, onTentativa) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(
     apiKey
   )}`;
 
   const partesResolvidas = await resolverPartes(partes);
 
-  const resp = await chamarGeminiComRetry(url, {
-    contents: [{ parts: partesResolvidas }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
-  });
+  const resp = await chamarGeminiComRetry(
+    url,
+    {
+      contents: [{ parts: partesResolvidas }],
+      // 2048 tokens já cortava o resumo detalhado no meio (às vezes só
+      // "Dor do cliente" saía completo): modelos mais novos gastam parte
+      // desse limite com raciocínio interno antes de escrever a resposta
+      // visível, sobrando pouco pro texto em si num resumo com bastante
+      // conteúdo. 8192 dá folga de sobra pro texto sem custar muito mais.
+      generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+    },
+    onTentativa
+  );
 
   const dados = await resp.json();
   const cand = dados.candidates && dados.candidates[0];
@@ -128,6 +143,15 @@ async function gerarResumoIA(apiKey, partes) {
     .map((p) => p.text || "")
     .join("")
     .trim();
+
+  // Se o modelo foi cortado por limite de tokens, o texto vem incompleto
+  // (ex: só a primeira seção do resumo) mas não vazio — sem essa checagem
+  // isso passaria como resumo "pronto" só que pela metade.
+  if (texto && cand.finishReason === "MAX_TOKENS") {
+    throw new Error(
+      "O resumo foi cortado por ficar longo demais para a IA. Tente novamente ou escolha um nível de detalhe menor (normal/breve)."
+    );
+  }
 
   if (!texto) {
     const motivo = cand.finishReason ? ` (motivo: ${cand.finishReason})` : "";
@@ -229,7 +253,14 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
       return;
     }
 
-    const texto = await gerarResumoIA(apiKey, mensagem.parts);
+    const texto = await gerarResumoIA(apiKey, mensagem.parts, () => {
+      // Heartbeat: cada retry por sobrecarga do Gemini atualiza atualizadoEm,
+      // então o content script sabe que ainda está vivo em vez de só ver
+      // "gerando" parado por dezenas de segundos.
+      chrome.storage.local.set({
+        rwcUltimoResumo: { ...contexto, atualizadoEm: Date.now() },
+      });
+    });
     finalizado = true;
     const prontoDados = { ...contexto, status: "pronto", texto, atualizadoEm: Date.now() };
     await salvarUltimoResumo(prontoDados);

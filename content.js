@@ -61,6 +61,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   let balaoUltimoEstadoMostrado = null;
   let urlGeracaoAcompanhada = null;
 
+  // Bolinha vermelha no ícone injetado no Freshworks: fica ligada quando o
+  // resumo da conversa ATUAL termina sem o agente ter visto (painel
+  // minimizado), e some assim que o painel é aberto. Diferente do balão
+  // (que acompanha a geração entre conversas), essa bolinha é sempre sobre
+  // a conversa que está sendo exibida agora.
+  let resumoPendente = false;
+
   function limparTexto(txt) {
     return (txt || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
   }
@@ -334,7 +341,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       mostrarStatus("error", "A geração anterior não terminou (a extensão pode ter sido reiniciada). Tente novamente.");
     } else if (dados.status === "gerando") {
       definirCarregando(true);
-      mostrarStatus("liberado", "Já pode trocar de tela — gerando o resumo em segundo plano...");
+      mostrarStatus("gerando");
       // Garante que o balão passe a acompanhar esta geração mesmo quando ela
       // não foi iniciada por esta função (ex: painel forçado a abrir ao
       // carregar a página com uma geração já em andamento nesta conversa).
@@ -346,6 +353,10 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       renderizarResumo(dados.texto);
       painelEl.querySelector("#rwc-result").dataset.raw = dados.texto;
       painelEl.querySelector("#rwc-result").classList.remove("rwc-hidden");
+      // Painel minimizado quando terminou: o agente ainda não viu o
+      // resultado, marca a bolinha de pendente no ícone do Freshworks.
+      resumoPendente = !painelEl.classList.contains("rwc-panel--open");
+      atualizarIndicadorPendente();
     } else if (dados.status === "erro") {
       definirCarregando(false);
       mostrarStatus("error", dados.erro || "Ocorreu um erro inesperado.");
@@ -408,18 +419,15 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     painel.innerHTML = `
       <div class="rwc-header">
         <div class="rwc-brand">
-          <span class="rwc-brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 48 40" fill="none">
-              <path d="M25 7L9 20L25 33" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-              <path d="M39 7L23 20L39 33" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-          </span>
           <span class="rwc-brand-copy">
-            <span class="rwc-brand-script">
-              Rewind
-              <svg class="rwc-brand-spark" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2l1.8 5.6L19 9l-5.2 1.4L12 16l-1.8-5.6L5 9l5.2-1.4L12 2Z"></path></svg>
-            </span>
-            <span class="rwc-brand-bold">Chat</span>
+            <span class="rwc-brand-name-purple">Rewind</span>
+            <span class="rwc-brand-name-gray">Chat</span>
+          </span>
+          <span class="rwc-brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 40" fill="#fff">
+              <path d="M22 6 8 20 22 34Z"></path>
+              <path d="M40 6 26 20 40 34Z"></path>
+            </svg>
           </span>
         </div>
         <div class="rwc-header-actions">
@@ -611,6 +619,8 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     painel.classList.add("rwc-panel--open");
     inicializarConfiguracoes();
     atualizarBalao();
+    resumoPendente = false;
+    atualizarIndicadorPendente();
   }
 
   function fecharPainel() {
@@ -626,6 +636,8 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     tipoEmAndamento = null;
     estadoAtual = null;
     urlGeracaoAcompanhada = null;
+    resumoPendente = false;
+    atualizarIndicadorPendente();
     fecharPainel();
     if (painelEl) {
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
@@ -702,20 +714,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
   }
 
-  const ICONE_STATUS_AVISO =
-    '<svg class="rwc-status-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-  const ICONE_STATUS_LIBERADO =
-    '<svg class="rwc-status-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>';
-
   function mostrarStatus(tipo, mensagem) {
     const el = painelEl.querySelector("#rwc-status");
     el.className = `rwc-status rwc-status--${tipo}`;
     if (tipo === "loading") {
       el.innerHTML = `<span class="rwc-spinner"></span><span>${mensagem}</span>`;
-    } else if (tipo === "aviso") {
-      el.innerHTML = `${ICONE_STATUS_AVISO}<span>${mensagem}</span>`;
-    } else if (tipo === "liberado") {
-      el.innerHTML = `${ICONE_STATUS_LIBERADO}<span>${mensagem}</span>`;
+    } else if (tipo === "gerando") {
+      el.innerHTML = `Gerando resumo<span class="rwc-dots"></span>`;
     } else {
       el.textContent = mensagem;
     }
@@ -778,7 +783,6 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
           "Nenhuma mensagem encontrada nesta tela. Abra um atendimento e tente novamente."
         );
       }
-      const temAudio = mensagens.some((m) => m.tipo === "audio");
       const parts = montarPartesPrompt(tipo, mensagens);
 
       // Handoff: a partir daqui a geração roda inteira no background.js e
@@ -800,12 +804,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
           /* aba pode fechar aqui sem problema — resultado chega via storage */
         });
 
-      mostrarStatus(
-        "liberado",
-        temAudio
-          ? "Leitura concluída — já pode trocar de tela. Baixando os áudios e gerando o resumo em segundo plano..."
-          : "Leitura concluída — já pode trocar de tela. Gerando o resumo em segundo plano..."
-      );
+      mostrarStatus("gerando");
     } catch (erro) {
       if (tipo !== tipoEmAndamento) return;
       mostrarStatus("error", erro.message || "Ocorreu um erro inesperado.");
@@ -862,6 +861,14 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return null;
   }
 
+  // Se o Freshworks recriar a toolbar (ex: ao trocar de conversa), o botão
+  // antigo pode ficar desconectado e um novo é criado do zero em
+  // criarBotaoInline() — sem classe nenhuma. Sincroniza aqui pra garantir
+  // que a bolinha nunca "some" só porque o elemento foi trocado.
+  function atualizarIndicadorPendente() {
+    if (botaoEl) botaoEl.classList.toggle("rwc-inline-btn--pendente", resumoPendente);
+  }
+
   function posicionarBotao() {
     const ponto = encontrarPontoDeInsercao();
     if (!ponto) {
@@ -871,6 +878,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
     if (!botaoEl || !botaoEl.isConnected) {
       botaoEl = criarBotaoInline();
+      atualizarIndicadorPendente();
     }
     botaoEl.style.display = "inline-flex";
 
@@ -891,7 +899,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     tipoEmAndamento = null;
     // estadoAtual/urlGeracaoAcompanhada NÃO são resetados aqui de propósito:
     // se uma geração estiver em andamento, o balão flutuante deve continuar
-    // acompanhando ela mesmo que o agente troque de contato/conversa.
+    // acompanhando ela mesmo que o agente troque de contato/conversa. Já a
+    // bolinha de pendente é sempre sobre a conversa atual, então some ao
+    // trocar — se a nova conversa tiver um resumo pronto não visto, o
+    // restaurarUltimoResumoSeCorresponder() abaixo cuida de mostrar.
+    resumoPendente = false;
+    atualizarIndicadorPendente();
     if (painelEl) {
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
       esconderStatus();
