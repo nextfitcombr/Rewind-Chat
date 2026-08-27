@@ -310,8 +310,26 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  // Precisa casar com idDaConversa() do background.js. A comparação era por
+  // `location.href` exato, então bastava o Freshworks mexer na query string
+  // sozinho pra o resumo já pronto virar "de outra conversa" e nunca mais
+  // aparecer — mesmo com a notificação de "pronto" já tendo disparado.
+  function idDaConversa(href) {
+    try {
+      const u = new URL(href);
+      return `${u.origin}${u.pathname}${u.hash}`.replace(/\/+$/, "");
+    } catch (_) {
+      return href || "";
+    }
+  }
+
   function pertenceAConversaAtual(dados) {
-    return !!dados && dados.url === location.href;
+    return !!dados && idDaConversa(dados.url) === idDaConversa(location.href);
+  }
+
+  async function lerResumoDaConversa(href) {
+    const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+    return (rwcResumos || {})[idDaConversa(href)] || null;
   }
 
   // Se o background morrer no meio da geração (ex: service worker
@@ -320,7 +338,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   // vivo (heartbeat), então esse tempo mede "sem sinal de vida", não
   // "desde o início" — por isso pode ficar folgado sem risco de interromper
   // uma geração longa (vários áudios + retries) que ainda está rodando.
-  const GERANDO_TIMEOUT_MS = 120000;
+  //
+  // Folgado o bastante pra dar tempo do alarme de retomada do background
+  // (que roda a cada 1 min e considera órfão quem passou 60s sem heartbeat)
+  // ressuscitar o trabalho. Desistir antes disso mostraria um erro em cima
+  // de uma geração que está justamente sendo recuperada.
+  const GERANDO_TIMEOUT_MS = 240000;
 
   function exibirResumo(dados, opcoes) {
     if (!dados) return;
@@ -371,7 +394,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   // e reagindo (pontinhos → check/erro) mesmo depois de o agente trocar de
   // contato/conversa.
   function atualizarBalaoDaGeracaoAcompanhada(dados) {
-    if (!dados || !urlGeracaoAcompanhada || dados.url !== urlGeracaoAcompanhada) return;
+    if (
+      !dados ||
+      !urlGeracaoAcompanhada ||
+      idDaConversa(dados.url) !== idDaConversa(urlGeracaoAcompanhada)
+    ) {
+      return;
+    }
 
     if (dados.status === "gerando" && Date.now() - (dados.atualizadoEm || 0) > GERANDO_TIMEOUT_MS) {
       estadoAtual = "erro";
@@ -399,9 +428,9 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   async function restaurarUltimoResumoSeCorresponder() {
     if (!extensaoValida()) return;
     try {
-      const { rwcUltimoResumo } = await chrome.storage.local.get("rwcUltimoResumo");
-      if (pertenceAConversaAtual(rwcUltimoResumo)) {
-        exibirResumo(rwcUltimoResumo, { forcarSelecao: true });
+      const dados = await lerResumoDaConversa(location.href);
+      if (pertenceAConversaAtual(dados)) {
+        exibirResumo(dados, { forcarSelecao: true });
       }
     } catch (_) {
       /* contexto da extensão invalidado — ignora */
@@ -409,10 +438,15 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   }
 
   chrome.storage.onChanged.addListener((mudancas, area) => {
-    if (area !== "local" || !mudancas.rwcUltimoResumo) return;
-    const dados = mudancas.rwcUltimoResumo.newValue;
-    atualizarBalaoDaGeracaoAcompanhada(dados);
-    exibirResumo(dados);
+    if (area !== "local" || !mudancas.rwcResumos) return;
+    const mapa = mudancas.rwcResumos.newValue || {};
+    // O balão segue a conversa que ESTA aba mandou gerar; o painel segue a
+    // conversa aberta agora. Podem ser diferentes se o agente trocou de tela
+    // no meio da geração, então cada um lê a sua própria entrada.
+    if (urlGeracaoAcompanhada) {
+      atualizarBalaoDaGeracaoAcompanhada(mapa[idDaConversa(urlGeracaoAcompanhada)]);
+    }
+    exibirResumo(mapa[idDaConversa(location.href)]);
   });
 
   function criarPainel() {
@@ -650,9 +684,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
     if (!extensaoValida()) return;
     try {
-      const { rwcUltimoResumo } = await chrome.storage.local.get("rwcUltimoResumo");
-      if (pertenceAConversaAtual(rwcUltimoResumo)) {
-        await chrome.storage.local.remove("rwcUltimoResumo");
+      // Apaga só o resumo desta conversa — os das outras seguem guardados.
+      const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+      const mapa = { ...(rwcResumos || {}) };
+      const chave = idDaConversa(location.href);
+      if (mapa[chave]) {
+        delete mapa[chave];
+        await chrome.storage.local.set({ rwcResumos: mapa });
       }
     } catch (_) {
       /* contexto da extensão invalidado — ignora */

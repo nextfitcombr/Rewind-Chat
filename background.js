@@ -166,8 +166,84 @@ const ROTULOS_TIPO = {
   detalhado: "Resumo detalhado",
 };
 
-function salvarUltimoResumo(dados) {
-  return chrome.storage.local.set({ rwcUltimoResumo: dados });
+// Identidade da conversa. Antes o resumo era casado por `location.href`
+// exato: qualquer query string que o Freshworks acrescente/remova sozinho
+// (filtro, view, tracking) fazia o resumo já pronto virar "de outra
+// conversa" e sumir da tela pra sempre. O caminho da URL é o que identifica
+// o atendimento, então a query fica de fora da chave.
+function idDaConversa(href) {
+  try {
+    const u = new URL(href);
+    return `${u.origin}${u.pathname}${u.hash}`.replace(/\/+$/, "");
+  } catch (_) {
+    return href || "";
+  }
+}
+
+// Guardamos um resumo POR CONVERSA. Com uma chave única global, começar um
+// resumo na conversa B apagava o resultado já pronto da conversa A (a
+// primeira coisa que processarGeracaoDeResumo faz é gravar o status
+// "gerando"). O agente recebia a notificação de "pronto" da A, voltava pra
+// ela e não encontrava nada.
+const MAX_RESUMOS_GUARDADOS = 20;
+
+// Duas gerações podem rodar em paralelo agora (uma por conversa), e ambas
+// escrevem no mesmo objeto do storage. Sem serializar, o read-modify-write
+// de uma sobrescreve o da outra.
+let filaEscritaResumos = Promise.resolve();
+
+function podarResumos(mapa) {
+  const chaves = Object.keys(mapa);
+  if (chaves.length <= MAX_RESUMOS_GUARDADOS) return mapa;
+  const podado = {};
+  chaves
+    .sort((a, b) => (mapa[b]?.atualizadoEm || 0) - (mapa[a]?.atualizadoEm || 0))
+    .slice(0, MAX_RESUMOS_GUARDADOS)
+    .forEach((chave) => {
+      podado[chave] = mapa[chave];
+    });
+  return podado;
+}
+
+// `mutador` recebe o mapa atual e devolve o novo — ou null pra desistir da
+// escrita (ex: heartbeat que percebeu que a geração já terminou).
+function atualizarResumos(mutador) {
+  filaEscritaResumos = filaEscritaResumos
+    .then(async () => {
+      const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+      const mapa = rwcResumos && typeof rwcResumos === "object" ? { ...rwcResumos } : {};
+      const novo = mutador(mapa);
+      if (!novo) return;
+      await chrome.storage.local.set({ rwcResumos: podarResumos(novo) });
+    })
+    .catch((erro) => console.error("[rwc] falha ao gravar resumo", erro));
+  return filaEscritaResumos;
+}
+
+function salvarResumo(dados) {
+  return atualizarResumos((mapa) => {
+    mapa[idDaConversa(dados.url)] = dados;
+    return mapa;
+  });
+}
+
+// Marca "ainda estou vivo" sem mexer no resto do estado — e desiste se a
+// geração já terminou ou se outra geração assumiu esta conversa.
+function tocarHeartbeat(contexto, aindaGerando) {
+  return atualizarResumos((mapa) => {
+    const chave = idDaConversa(contexto.url);
+    const atual = mapa[chave];
+    if (
+      (aindaGerando && !aindaGerando()) ||
+      !atual ||
+      atual.status !== "gerando" ||
+      atual.solicitacaoId !== contexto.solicitacaoId
+    ) {
+      return null;
+    }
+    mapa[chave] = { ...atual, atualizadoEm: Date.now() };
+    return mapa;
+  });
 }
 
 function notificar(titulo, mensagem) {
@@ -178,6 +254,128 @@ function notificar(titulo, mensagem) {
     message: mensagem,
   });
 }
+
+/* ==========================================================================
+   Trabalhos duráveis.
+
+   O keep-alive abaixo é um setInterval DENTRO do service worker — e é
+   justamente isso que o Chrome estrangula quando o agente minimiza a janela
+   e vai fazer outra coisa. Se o intervalo deixa de disparar por mais de
+   ~30s, o worker é encerrado no meio do fetch pro Gemini: a promise morre
+   sem passar pelo catch, nada é gravado, nenhuma notificação dispara, e o
+   storage fica preso em "gerando" para sempre. O agente volta pro
+   atendimento e não encontra resumo nenhum.
+
+   Guardar o pedido (as `parts` já montadas) faz a geração deixar de ser
+   volátil: um alarme reacorda o worker e o trabalho órfão é refeito do
+   zero, sem depender de o agente estar com a aba aberta ou o Chrome em foco.
+   ========================================================================== */
+const ALARME_RETOMADA = "rwc-retomar-trabalhos";
+
+// Tempo sem heartbeat a partir do qual o trabalho é considerado órfão.
+// Menor que o GERANDO_TIMEOUT_MS do content script (120s) de propósito: a
+// retomada tem que acontecer antes de a tela desistir e mostrar erro.
+const TRABALHO_ORFAO_MS = 60000;
+const MAX_RETOMADAS = 2;
+
+// Trabalhos que ESTE worker já está executando agora — sem isso o alarme
+// reiniciaria uma geração que só está demorando.
+const emExecucao = new Set();
+
+async function lerTrabalhos() {
+  const { rwcTrabalhos } = await chrome.storage.local.get("rwcTrabalhos");
+  return rwcTrabalhos && typeof rwcTrabalhos === "object" ? rwcTrabalhos : {};
+}
+
+async function salvarTrabalho(trabalho) {
+  const trabalhos = await lerTrabalhos();
+  trabalhos[trabalho.solicitacaoId] = trabalho;
+  await chrome.storage.local.set({ rwcTrabalhos: trabalhos });
+}
+
+async function removerTrabalho(solicitacaoId) {
+  const trabalhos = await lerTrabalhos();
+  if (!trabalhos[solicitacaoId]) return;
+  delete trabalhos[solicitacaoId];
+  await chrome.storage.local.set({ rwcTrabalhos: trabalhos });
+}
+
+function agendarRetomada() {
+  // O alarme sobrevive à morte do worker e o reacorda — é isso que o
+  // setInterval não consegue fazer.
+  chrome.alarms.create(ALARME_RETOMADA, { periodInMinutes: 1 });
+}
+
+async function retomarTrabalhosOrfaos() {
+  let trabalhos;
+  try {
+    trabalhos = await lerTrabalhos();
+  } catch (_) {
+    return;
+  }
+  const pendentes = Object.values(trabalhos);
+  if (!pendentes.length) return;
+
+  const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+  const mapa = rwcResumos || {};
+
+  for (const trabalho of pendentes) {
+    if (emExecucao.has(trabalho.solicitacaoId)) continue;
+
+    const resumo = mapa[idDaConversa(trabalho.url)];
+    // Se outra geração assumiu a conversa, ou ela já terminou, o trabalho
+    // não interessa mais.
+    if (!resumo || resumo.solicitacaoId !== trabalho.solicitacaoId) {
+      await removerTrabalho(trabalho.solicitacaoId);
+      continue;
+    }
+    if (resumo.status !== "gerando") {
+      await removerTrabalho(trabalho.solicitacaoId);
+      continue;
+    }
+    if (Date.now() - (resumo.atualizadoEm || 0) < TRABALHO_ORFAO_MS) continue;
+
+    const retomadas = (trabalho.retomadas || 0) + 1;
+    if (retomadas > MAX_RETOMADAS) {
+      console.warn("[rwc] trabalho excedeu as retomadas, desistindo", trabalho.solicitacaoId);
+      await removerTrabalho(trabalho.solicitacaoId);
+      await salvarResumo({
+        ...resumo,
+        status: "erro",
+        erro: "A geração foi interrompida pelo navegador e não pôde ser concluída. Tente novamente.",
+        atualizadoEm: Date.now(),
+      });
+      notificar("Rewind Chat — erro ao gerar resumo", "A geração foi interrompida pelo navegador.");
+      continue;
+    }
+
+    console.warn("[rwc] retomando trabalho órfão", trabalho.solicitacaoId, `(${retomadas}/${MAX_RETOMADAS})`);
+    // Marca antes do await pra um segundo disparo do alarme não começar a
+    // mesma geração duas vezes.
+    emExecucao.add(trabalho.solicitacaoId);
+    await salvarTrabalho({ ...trabalho, retomadas });
+    processarGeracaoDeResumo(
+      { ...trabalho, retomadas, type: "rwc-gerar-resumo" },
+      () => {
+        /* ninguém esperando resposta numa retomada */
+      }
+    );
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarme) => {
+  if (alarme.name === ALARME_RETOMADA) retomarTrabalhosOrfaos();
+});
+
+// O worker pode acordar por vários motivos; em qualquer um deles vale checar
+// se ficou trabalho pela metade da última vez que ele foi morto.
+chrome.runtime.onStartup.addListener(retomarTrabalhosOrfaos);
+chrome.runtime.onInstalled.addListener(() => {
+  agendarRetomada();
+  retomarTrabalhosOrfaos();
+});
+agendarRetomada();
+retomarTrabalhosOrfaos();
 
 // O MV3 pode encerrar o service worker por inatividade (~30s) mesmo com um
 // fetch pendente, dependendo da versão do Chrome. Qualquer chamada a uma
@@ -201,19 +399,7 @@ function manterServiceWorkerAtivo(contexto, aindaGerando) {
   const intervalo = setInterval(() => {
     chrome.storage.local.get("rwcKeepAlive", () => void chrome.runtime.lastError);
     if (!aindaGerando()) return;
-    chrome.storage.local.get("rwcUltimoResumo", ({ rwcUltimoResumo }) => {
-      if (
-        !aindaGerando() ||
-        !rwcUltimoResumo ||
-        rwcUltimoResumo.status !== "gerando" ||
-        rwcUltimoResumo.solicitacaoId !== contexto.solicitacaoId
-      ) {
-        return;
-      }
-      chrome.storage.local.set({
-        rwcUltimoResumo: { ...rwcUltimoResumo, atualizadoEm: Date.now() },
-      });
-    });
+    tocarHeartbeat(contexto, aindaGerando);
   }, 15000);
   return () => clearInterval(intervalo);
 }
@@ -233,7 +419,19 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
     atualizadoEm: Date.now(),
   };
   console.log("[rwc] geração iniciada", contexto.tipo, contexto.url);
-  await salvarUltimoResumo(contexto);
+  await salvarResumo(contexto);
+
+  // Persiste o pedido ANTES de começar: se o Chrome matar o worker no meio
+  // do fetch, é daqui que a retomada reconstrói o trabalho.
+  emExecucao.add(contexto.solicitacaoId);
+  await salvarTrabalho({
+    solicitacaoId: contexto.solicitacaoId,
+    url: contexto.url,
+    tipo: contexto.tipo,
+    parts: mensagem.parts,
+    retomadas: mensagem.retomadas || 0,
+    criadoEm: Date.now(),
+  });
 
   let finalizado = false;
   const pararKeepAlive = manterServiceWorkerAtivo(contexto, () => !finalizado);
@@ -247,7 +445,7 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
         erro: "Nenhuma chave de API do Gemini configurada.",
         atualizadoEm: Date.now(),
       };
-      await salvarUltimoResumo(erroDados);
+      await salvarResumo(erroDados);
       console.warn("[rwc] sem chave de API configurada");
       sendResponse({ ok: false, error: erroDados.erro });
       return;
@@ -257,13 +455,11 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
       // Heartbeat: cada retry por sobrecarga do Gemini atualiza atualizadoEm,
       // então o content script sabe que ainda está vivo em vez de só ver
       // "gerando" parado por dezenas de segundos.
-      chrome.storage.local.set({
-        rwcUltimoResumo: { ...contexto, atualizadoEm: Date.now() },
-      });
+      tocarHeartbeat(contexto);
     });
     finalizado = true;
     const prontoDados = { ...contexto, status: "pronto", texto, atualizadoEm: Date.now() };
-    await salvarUltimoResumo(prontoDados);
+    await salvarResumo(prontoDados);
     console.log("[rwc] geração concluída", contexto.tipo, contexto.url);
     notificar("Rewind Chat", `${ROTULOS_TIPO[mensagem.tipo] || "Resumo"} pronto.`);
     sendResponse({ ok: true, text: texto });
@@ -271,12 +467,16 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
     finalizado = true;
     const erroMsg = erro.message || "Ocorreu um erro inesperado.";
     const erroDados = { ...contexto, status: "erro", erro: erroMsg, atualizadoEm: Date.now() };
-    await salvarUltimoResumo(erroDados);
+    await salvarResumo(erroDados);
     console.error("[rwc] geração falhou", erro);
     notificar("Rewind Chat — erro ao gerar resumo", erroMsg);
     sendResponse({ ok: false, error: erroMsg });
   } finally {
     pararKeepAlive();
+    // Terminou (com sucesso ou erro definitivo): o trabalho não deve mais
+    // ser retomado pelo alarme.
+    emExecucao.delete(contexto.solicitacaoId);
+    await removerTrabalho(contexto.solicitacaoId).catch(() => {});
   }
 }
 
