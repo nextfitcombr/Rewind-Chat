@@ -1,18 +1,27 @@
 "use strict";
 
+// O Firefox expõe as APIs em `browser.*` retornando promise; o `chrome.*`
+// dele é a camada de compatibilidade baseada em callback. Como este código
+// usa promise (`await ...storage.local.get()`), preferimos `browser` quando
+// ele existe. No Chrome/Brave `browser` é undefined e nada muda.
+//
+// Usa nome próprio em vez de redeclarar `chrome`: `const chrome` no escopo
+// global lançaria SyntaxError se `chrome` for propriedade não-configurável.
+const api = globalThis.browser || globalThis.chrome;
+
 async function obterChaveSalva() {
-  const { geminiKey } = await chrome.storage.local.get("geminiKey");
+  const { geminiKey } = await api.storage.local.get("geminiKey");
   return geminiKey || "";
 }
 
 async function semearChaveDoConfigLocal() {
   try {
-    const resp = await fetch(chrome.runtime.getURL("config.local.js"));
+    const resp = await fetch(api.runtime.getURL("config.local.js"));
     if (!resp.ok) return "";
     const texto = await resp.text();
     const match = texto.match(/iaKey\s*:\s*["']([^"']+)["']/);
     if (!match || !match[1]) return "";
-    await chrome.storage.local.set({ geminiKey: match[1] });
+    await api.storage.local.set({ geminiKey: match[1] });
     return match[1];
   } catch (_) {
     return "";
@@ -218,11 +227,11 @@ function podarResumos(mapa) {
 function atualizarResumos(mutador) {
   filaEscritaResumos = filaEscritaResumos
     .then(async () => {
-      const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+      const { rwcResumos } = await api.storage.local.get("rwcResumos");
       const mapa = rwcResumos && typeof rwcResumos === "object" ? { ...rwcResumos } : {};
       const novo = mutador(mapa);
       if (!novo) return;
-      await chrome.storage.local.set({ rwcResumos: podarResumos(novo) });
+      await api.storage.local.set({ rwcResumos: podarResumos(novo) });
     })
     .catch((erro) => console.error("[rwc] falha ao gravar resumo", erro));
   return filaEscritaResumos;
@@ -255,7 +264,7 @@ function tocarHeartbeat(contexto, aindaGerando) {
 }
 
 function notificar(titulo, mensagem) {
-  chrome.notifications.create({
+  api.notifications.create({
     type: "basic",
     iconUrl: "icons/icon128.png",
     title: titulo,
@@ -298,27 +307,27 @@ const MAX_RETOMADAS = 3;
 const emExecucao = new Set();
 
 async function lerTrabalhos() {
-  const { rwcTrabalhos } = await chrome.storage.local.get("rwcTrabalhos");
+  const { rwcTrabalhos } = await api.storage.local.get("rwcTrabalhos");
   return rwcTrabalhos && typeof rwcTrabalhos === "object" ? rwcTrabalhos : {};
 }
 
 async function salvarTrabalho(trabalho) {
   const trabalhos = await lerTrabalhos();
   trabalhos[trabalho.solicitacaoId] = trabalho;
-  await chrome.storage.local.set({ rwcTrabalhos: trabalhos });
+  await api.storage.local.set({ rwcTrabalhos: trabalhos });
 }
 
 async function removerTrabalho(solicitacaoId) {
   const trabalhos = await lerTrabalhos();
   if (!trabalhos[solicitacaoId]) return;
   delete trabalhos[solicitacaoId];
-  await chrome.storage.local.set({ rwcTrabalhos: trabalhos });
+  await api.storage.local.set({ rwcTrabalhos: trabalhos });
 }
 
 function agendarRetomada() {
   // O alarme sobrevive à morte do worker e o reacorda — é isso que o
   // setInterval não consegue fazer.
-  chrome.alarms.create(ALARME_RETOMADA, { periodInMinutes: 1 });
+  api.alarms.create(ALARME_RETOMADA, { periodInMinutes: 1 });
 }
 
 async function retomarTrabalhosOrfaos() {
@@ -331,7 +340,7 @@ async function retomarTrabalhosOrfaos() {
   const pendentes = Object.values(trabalhos);
   if (!pendentes.length) return;
 
-  const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+  const { rwcResumos } = await api.storage.local.get("rwcResumos");
   const mapa = rwcResumos || {};
 
   for (const trabalho of pendentes) {
@@ -387,14 +396,14 @@ async function retomarTrabalhosOrfaos() {
   }
 }
 
-chrome.alarms.onAlarm.addListener((alarme) => {
+api.alarms.onAlarm.addListener((alarme) => {
   if (alarme.name === ALARME_RETOMADA) retomarTrabalhosOrfaos();
 });
 
 // O worker pode acordar por vários motivos; em qualquer um deles vale checar
 // se ficou trabalho pela metade da última vez que ele foi morto.
-chrome.runtime.onStartup.addListener(retomarTrabalhosOrfaos);
-chrome.runtime.onInstalled.addListener(() => {
+api.runtime.onStartup.addListener(retomarTrabalhosOrfaos);
+api.runtime.onInstalled.addListener(() => {
   agendarRetomada();
   retomarTrabalhosOrfaos();
 });
@@ -421,7 +430,7 @@ retomarTrabalhosOrfaos();
 // já pronto/com erro.
 function manterServiceWorkerAtivo(contexto, aindaGerando) {
   const intervalo = setInterval(() => {
-    chrome.storage.local.get("rwcKeepAlive", () => void chrome.runtime.lastError);
+    api.storage.local.get("rwcKeepAlive", () => void api.runtime.lastError);
     if (!aindaGerando()) return;
     tocarHeartbeat(contexto, aindaGerando);
   }, 15000);
@@ -431,7 +440,7 @@ function manterServiceWorkerAtivo(contexto, aindaGerando) {
 // A partir do momento em que a mensagem chega aqui, a geração roda até o
 // fim mesmo que a aba/conversa de origem seja fechada: o resultado (ou
 // erro) é persistido em storage, e o content script — se ainda estiver
-// aberto na mesma conversa — atualiza a tela via chrome.storage.onChanged.
+// aberto na mesma conversa — atualiza a tela via api.storage.onChanged.
 // Se a aba já tiver fechado, o sendResponse simplesmente falha em silêncio;
 // o trabalho em si não é interrompido por isso.
 async function processarGeracaoDeResumo(mensagem, sendResponse) {
@@ -536,7 +545,7 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
   }
 }
 
-chrome.runtime.onMessage.addListener((mensagem, _sender, sendResponse) => {
+api.runtime.onMessage.addListener((mensagem, _sender, sendResponse) => {
   if (mensagem?.type === "rwc-obter-config-inicial") {
     (async () => {
       const existente = await obterChaveSalva();

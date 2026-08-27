@@ -1,6 +1,15 @@
 (function () {
   "use strict";
 
+  // O Firefox expõe as APIs em `browser.*` retornando promise; o `chrome.*`
+  // dele é a camada de compatibilidade baseada em callback. Como este código
+  // usa promise (`await ...storage.local.get()`), preferimos `browser` quando
+  // ele existe. No Chrome/Brave `browser` é undefined e nada muda.
+  //
+  // Usa nome próprio em vez de redeclarar `chrome`: `const chrome` no escopo
+  // global lançaria SyntaxError se `chrome` for propriedade não-configurável.
+  const api = globalThis.browser || globalThis.chrome;
+
   const SELECTORS = {
     messageItem: "li.user-messages",
     agentMessage: ".fc-agent-message",
@@ -328,7 +337,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   }
 
   async function lerResumoDaConversa(href) {
-    const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+    const { rwcResumos } = await api.storage.local.get("rwcResumos");
     return (rwcResumos || {})[idDaConversa(href)] || null;
   }
 
@@ -417,12 +426,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   }
 
   // Se a extensão for recarregada (chrome://extensions) com esta aba já
-  // aberta, o content script antigo fica órfão: chrome.runtime.id vira
-  // undefined e qualquer chamada a chrome.storage/chrome.runtime rejeita
+  // aberta, o content script antigo fica órfão: api.runtime.id vira
+  // undefined e qualquer chamada a api.storage/api.runtime rejeita
   // com "Extension context invalidated". Não tem como recuperar a aba sem
   // um F5 nela, então só evitamos deixar essas chamadas sem tratamento.
   function extensaoValida() {
-    return !!(chrome.runtime && chrome.runtime.id);
+    return !!(api.runtime && api.runtime.id);
   }
 
   async function restaurarUltimoResumoSeCorresponder() {
@@ -437,7 +446,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
   }
 
-  chrome.storage.onChanged.addListener((mudancas, area) => {
+  api.storage.onChanged.addListener((mudancas, area) => {
     if (area !== "local" || !mudancas.rwcResumos) return;
     const mapa = mudancas.rwcResumos.newValue || {};
     // O balão segue a conversa que ESTA aba mandou gerar; o painel segue a
@@ -685,12 +694,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     if (!extensaoValida()) return;
     try {
       // Apaga só o resumo desta conversa — os das outras seguem guardados.
-      const { rwcResumos } = await chrome.storage.local.get("rwcResumos");
+      const { rwcResumos } = await api.storage.local.get("rwcResumos");
       const mapa = { ...(rwcResumos || {}) };
       const chave = idDaConversa(location.href);
       if (mapa[chave]) {
         delete mapa[chave];
-        await chrome.storage.local.set({ rwcResumos: mapa });
+        await api.storage.local.set({ rwcResumos: mapa });
       }
     } catch (_) {
       /* contexto da extensão invalidado — ignora */
@@ -715,7 +724,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     }
     const campo = painelEl.querySelector("#rwc-gemini-key");
     try {
-      const { geminiKey } = await chrome.storage.local.get("geminiKey");
+      const { geminiKey } = await api.storage.local.get("geminiKey");
       if (geminiKey) {
         campo.value = geminiKey;
         return;
@@ -723,7 +732,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     } catch (_) {
       return;
     }
-    const resposta = await chrome.runtime
+    const resposta = await api.runtime
       .sendMessage({ type: "rwc-obter-config-inicial" })
       .catch(() => null);
     if (resposta && resposta.geminiKey) {
@@ -746,7 +755,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     const valor = campo.value.trim();
     if (!valor) return;
     try {
-      await chrome.storage.local.set({ geminiKey: valor });
+      await api.storage.local.set({ geminiKey: valor });
       mostrarStatusConfig("Chave salva!", true);
       setTimeout(() => painelEl.querySelector("#rwc-settings-status").classList.add("rwc-hidden"), 2000);
     } catch (_) {
@@ -794,7 +803,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
     let geminiKey;
     try {
-      ({ geminiKey } = await chrome.storage.local.get("geminiKey"));
+      ({ geminiKey } = await api.storage.local.get("geminiKey"));
     } catch (_) {
       mostrarStatus("error", "A extensão foi atualizada. Recarregue esta página (F5) e tente de novo.");
       return;
@@ -831,7 +840,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       // a tela; se não, o resultado fica pronto para quando reabrir a mesma
       // conversa (ou dispara uma notificação do sistema). A partir daqui já
       // é seguro trocar de tela/contato.
-      chrome.runtime
+      api.runtime
         .sendMessage({
           type: "rwc-gerar-resumo",
           apiKey: geminiKey,
