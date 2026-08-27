@@ -481,7 +481,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
       <div class="rwc-settings rwc-hidden" id="rwc-settings">
         <label class="rwc-field-label" for="rwc-gemini-key">Chave da API do Gemini</label>
-        <input type="password" id="rwc-gemini-key" class="rwc-input" placeholder="Cole sua chave aqui" autocomplete="off" />
+        <input type="text" id="rwc-gemini-key" class="rwc-input rwc-input--secreto" placeholder="Cole sua chave aqui" autocomplete="off" spellcheck="false" />
         <button type="button" class="rwc-btn-primary" id="rwc-save-key">Salvar</button>
         <span class="rwc-settings-status rwc-hidden" id="rwc-settings-status"></span>
       </div>

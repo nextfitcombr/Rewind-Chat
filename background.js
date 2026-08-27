@@ -102,10 +102,18 @@ async function chamarGeminiComRetry(url, body, onTentativa, tentativas = 3) {
       if (status === 400) dica = " (chave da API do Gemini inválida)";
       if (status === 429) dica = " (limite de uso da IA atingido, tente novamente em instantes)";
       if (status === 503) dica = " (modelo sobrecarregado no momento, tente novamente em instantes)";
-      throw new Error(`A IA retornou ${status}${dica}. ${corpo}`);
+      const falha = new Error(`A IA retornou ${status}${dica}. ${corpo}`);
+      // Marca o erro como transitório: em vez de desistir e obrigar o agente
+      // a refazer tudo, o chamador reagenda o trabalho (que já está guardado
+      // com o tipo de resumo escolhido e a transcrição pronta).
+      falha.retentavel = retentavel;
+      throw falha;
     }
 
-    const espera = Math.min(2000 * 2 ** (tentativa - 1), 8000);
+    // Jitter: a extensão roda em vários agentes ao mesmo tempo e um pico de
+    // 503 atinge todos juntos. Sem isso, todos voltariam a bater na API no
+    // mesmo instante e só prolongariam a sobrecarga.
+    const espera = Math.min(2000 * 2 ** (tentativa - 1), 8000) + Math.floor(Math.random() * 1000);
     console.warn(`[rwc] Gemini retornou ${status}, tentando de novo em ${espera}ms (tentativa ${tentativa}/${tentativas})`);
     if (onTentativa) onTentativa(tentativa + 1, tentativas);
     await aguardarMs(espera);
@@ -276,7 +284,14 @@ const ALARME_RETOMADA = "rwc-retomar-trabalhos";
 // Menor que o GERANDO_TIMEOUT_MS do content script (120s) de propósito: a
 // retomada tem que acontecer antes de a tela desistir e mostrar erro.
 const TRABALHO_ORFAO_MS = 60000;
-const MAX_RETOMADAS = 2;
+
+// Espera antes de tentar de novo quando a IA respondeu que está
+// sobrecarregada. O alarme roda de minuto em minuto, então na prática a
+// próxima tentativa cai no tique seguinte.
+const ESPERA_REAGENDAMENTO_MS = 45000;
+
+// Cobre tanto worker morto pelo navegador quanto pico de 503 no Gemini.
+const MAX_RETOMADAS = 3;
 
 // Trabalhos que ESTE worker já está executando agora — sem isso o alarme
 // reiniciaria uma geração que só está demorando.
@@ -333,19 +348,28 @@ async function retomarTrabalhosOrfaos() {
       await removerTrabalho(trabalho.solicitacaoId);
       continue;
     }
-    if (Date.now() - (resumo.atualizadoEm || 0) < TRABALHO_ORFAO_MS) continue;
+    // Duas formas de ficar elegível: um reagendamento explícito (a IA estava
+    // sobrecarregada e pedimos pra tentar mais tarde) ou o trabalho ter
+    // ficado sem sinal de vida, sinal de que o worker morreu no meio.
+    const naHora = resumo.proximaTentativaEm
+      ? Date.now() >= resumo.proximaTentativaEm
+      : Date.now() - (resumo.atualizadoEm || 0) >= TRABALHO_ORFAO_MS;
+    if (!naHora) continue;
 
     const retomadas = (trabalho.retomadas || 0) + 1;
     if (retomadas > MAX_RETOMADAS) {
       console.warn("[rwc] trabalho excedeu as retomadas, desistindo", trabalho.solicitacaoId);
       await removerTrabalho(trabalho.solicitacaoId);
+      const motivo = trabalho.ultimoErro
+        ? `A IA seguiu indisponível após várias tentativas. Último retorno: ${trabalho.ultimoErro}`
+        : "A geração foi interrompida pelo navegador e não pôde ser concluída. Tente novamente.";
       await salvarResumo({
         ...resumo,
         status: "erro",
-        erro: "A geração foi interrompida pelo navegador e não pôde ser concluída. Tente novamente.",
+        erro: motivo,
         atualizadoEm: Date.now(),
       });
-      notificar("Rewind Chat — erro ao gerar resumo", "A geração foi interrompida pelo navegador.");
+      notificar("Rewind Chat — erro ao gerar resumo", motivo);
       continue;
     }
 
@@ -434,6 +458,7 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
   });
 
   let finalizado = false;
+  let reagendado = false;
   const pararKeepAlive = manterServiceWorkerAtivo(contexto, () => !finalizado);
   try {
     const apiKey = mensagem.apiKey || (await obterChaveSalva());
@@ -466,6 +491,35 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
   } catch (erro) {
     finalizado = true;
     const erroMsg = erro.message || "Ocorreu um erro inesperado.";
+    const retomadasFeitas = mensagem.retomadas || 0;
+
+    // Sobrecarga do Gemini (503/429) é temporária e não é culpa do agente —
+    // não faz sentido devolver erro e obrigar a refazer a leitura da tela.
+    // O trabalho guardado já tem o tipo de resumo escolhido e a transcrição,
+    // então só reagendamos: o alarme tenta de novo sozinho e, pro agente, o
+    // painel continua em "Gerando resumo...".
+    if (erro.retentavel && retomadasFeitas < MAX_RETOMADAS) {
+      reagendado = true;
+      await salvarTrabalho({
+        solicitacaoId: contexto.solicitacaoId,
+        url: contexto.url,
+        tipo: contexto.tipo,
+        parts: mensagem.parts,
+        retomadas: retomadasFeitas,
+        ultimoErro: erroMsg,
+        criadoEm: Date.now(),
+      });
+      await salvarResumo({
+        ...contexto,
+        status: "gerando",
+        proximaTentativaEm: Date.now() + ESPERA_REAGENDAMENTO_MS,
+        atualizadoEm: Date.now(),
+      });
+      console.warn("[rwc] IA indisponível, reagendando", contexto.solicitacaoId, erroMsg);
+      sendResponse({ ok: false, error: erroMsg, reagendado: true });
+      return;
+    }
+
     const erroDados = { ...contexto, status: "erro", erro: erroMsg, atualizadoEm: Date.now() };
     await salvarResumo(erroDados);
     console.error("[rwc] geração falhou", erro);
@@ -473,10 +527,12 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
     sendResponse({ ok: false, error: erroMsg });
   } finally {
     pararKeepAlive();
-    // Terminou (com sucesso ou erro definitivo): o trabalho não deve mais
-    // ser retomado pelo alarme.
     emExecucao.delete(contexto.solicitacaoId);
-    await removerTrabalho(contexto.solicitacaoId).catch(() => {});
+    // Só apaga o trabalho se ele realmente acabou. Num reagendamento ele
+    // precisa sobreviver — é dele que a próxima tentativa é reconstruída.
+    if (!reagendado) {
+      await removerTrabalho(contexto.solicitacaoId).catch(() => {});
+    }
   }
 }
 

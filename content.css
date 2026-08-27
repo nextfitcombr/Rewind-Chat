@@ -218,6 +218,14 @@
   color: var(--rwc-text);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
+/* Mascara a chave sem usar type="password". O Chrome ignora de proposito o
+   autocomplete="off" em campos de senha e sempre oferece "salvar senha" - e,
+   como o painel e injetado na pagina do Freshworks, salvaria a chave da API
+   como se fosse a credencial do myfreshworks.com (indo pro Google Password
+   Manager do agente). Sem type="password" o prompt nao aparece. */
+.rwc-input--secreto {
+  -webkit-text-security: disc;
+}
 .rwc-input::placeholder {
   color: var(--rwc-text-faint);
 }
