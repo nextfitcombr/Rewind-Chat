@@ -1,6 +1,6 @@
 # Rewind Chat
 
-Extensão de navegador (Chrome, Manifest V3) desenvolvida pela **Next Fit** como ferramenta interna para agilizar o atendimento ao suporte no **Freshchat**.
+Extensão de navegador (Chrome, Manifest V3) desenvolvida como ferramenta interna para agilizar o atendimento ao suporte no **Freshchat**.
 
 A extensão lê a conversa diretamente da tela do Freshchat e gera **resumos automáticos do atendimento** — em nível breve, normal ou detalhado — usando a API Gemini (Google Generative Language API).
 
