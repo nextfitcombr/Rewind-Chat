@@ -311,7 +311,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
   /* ========================================================================
      Estado do resumo em background — sobrevive ao fechamento da aba.
      Depois que a leitura da tela termina e as partes são enviadas para o
-     background.js, a geração continua rodando lá independentemente desta
+     script de background, a geração continua rodando lá independentemente desta
      aba estar aberta. O resultado (ou erro) fica salvo em storage; aqui só
      refletimos esse estado quando ele pertence à conversa atual.
      ======================================================================== */
@@ -319,7 +319,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  // Precisa casar com idDaConversa() do background.js. A comparação era por
+  // Precisa casar com idDaConversa() do script de background. A comparação era por
   // `location.href` exato, então bastava o Freshworks mexer na query string
   // sozinho pra o resumo já pronto virar "de outra conversa" e nunca mais
   // aparecer — mesmo com a notificação de "pronto" já tendo disparado.
@@ -834,7 +834,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       }
       const parts = montarPartesPrompt(tipo, mensagens);
 
-      // Handoff: a partir daqui a geração roda inteira no background.js e
+      // Handoff: a partir daqui a geração roda inteira no script de background e
       // fica salva em storage. Fechar esta aba não interrompe mais nada —
       // se a aba/painel continuar aberto, o storage.onChanged acima atualiza
       // a tela; se não, o resultado fica pronto para quando reabrir a mesma

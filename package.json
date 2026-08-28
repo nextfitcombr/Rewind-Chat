@@ -1,0 +1,14 @@
+{
+  "name": "rewind-chat",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Extensão WebExtension para resumir atendimentos no Freshchat.",
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
+    "build:chromium": "node scripts/build.mjs chromium",
+    "build:firefox": "node scripts/build.mjs firefox"
+  },
+  "engines": { "node": ">=20" }
+}

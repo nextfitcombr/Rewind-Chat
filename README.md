@@ -17,7 +17,7 @@ A extensão lê a conversa diretamente da tela do Freshchat e gera **resumos aut
 ##  Tecnologias
 
 - **Manifest V3** (extensão de navegador)
-- JavaScript (background service worker + content script)
+- JavaScript e Node.js 20+ (build sem dependências externas)
 - CSS (estilização do conteúdo injetado)
 - API Gemini — `generativelanguage.googleapis.com`
 
@@ -25,13 +25,26 @@ A extensão lê a conversa diretamente da tela do Freshchat e gera **resumos aut
 
 ```
 rewind-chat/
-├── manifest.json      # Configuração da extensão (Manifest V3)
-├── background.js      # Service worker
-├── content.js          # Script injetado nas páginas do Freshchat
-├── content.css          # Estilos do conteúdo injetado
-├── icons/                 # Ícones da extensão (16, 48, 128px)
-└── .gitignore
+├── src/
+│   ├── common/                 # Código e recursos compartilhados
+│   ├── manifests/              # Manifestos de Chromium e Firefox
+│   └── platforms/              # Sobrescritas específicas por navegador
+├── scripts/                    # Build, validação e limpeza
+├── dist/                       # Pacotes gerados (não versionados)
+└── package.json
 ```
+
+## Desenvolvimento
+
+Requer Node.js 20 ou superior. Não há dependências externas.
+
+```powershell
+npm run check
+npm run build
+```
+
+Também é possível gerar apenas um navegador com `npm run build:chromium` ou
+`npm run build:firefox`.
 
 ##  Permissões
 
@@ -54,8 +67,12 @@ https://*.myfreshworks.com/crm/messaging/*
    ```
 2. Abra o Chrome (ou navegador baseado em Chromium) e acesse `chrome://extensions`.
 3. Ative o **Modo do desenvolvedor** no canto superior direito.
-4. Clique em **Carregar sem compactação** e selecione a pasta do repositório clonado.
-5. Acesse o Freshchat/Freshworks CRM normalmente — a extensão será ativada automaticamente na tela de atendimento.
+4. Execute `npm run build:chromium`.
+5. Clique em **Carregar sem compactação** e selecione `dist/chromium`.
+6. Acesse o Freshchat/Freshworks CRM normalmente — a extensão será ativada automaticamente na tela de atendimento.
+
+No Firefox, execute `npm run build:firefox` e carregue
+`dist/firefox/manifest.json` em `about:debugging#/runtime/this-firefox`.
 
 ##  Configuração
 
