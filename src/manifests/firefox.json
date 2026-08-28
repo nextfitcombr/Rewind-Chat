@@ -10,5 +10,14 @@
   "content_scripts": [{ "matches": ["https://*.myfreshworks.com/crm/messaging/*"], "js": ["content/index.js"], "css": ["styles/content.css"], "run_at": "document_idle" }],
   "action": { "default_title": "Rewind Chat" },
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
-  "browser_specific_settings": { "gecko": { "id": "rewind-chat@nextfit.com.br", "strict_min_version": "118.0" } }
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "rewind-chat@nextfit.com.br",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["personalCommunications"]
+      }
+    },
+    "gecko_android": { "strict_min_version": "142.0" }
+  }
 }
