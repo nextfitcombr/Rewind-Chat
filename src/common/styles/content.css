@@ -348,56 +348,109 @@
   color: var(--rwc-erro);
   border-color: var(--rwc-erro-bd);
 }
-.rwc-status--aviso {
-  background: transparent;
-  border: none;
-  padding: 4px 2px;
-  color: var(--rwc-amber);
-  font-weight: 600;
-}
-.rwc-status--gerando {
-  background: transparent;
-  border: none;
-  padding: 4px 2px;
-  color: var(--rwc-text-faint);
-  font-weight: 600;
-}
 .rwc-status-icon {
   flex-shrink: 0;
 }
 
-.rwc-dots {
-  display: inline-block;
+/* Barra de progresso da geração. A fração desenhada é tempo decorrido sobre
+   tempo estimado (ver o bloco "Barra de progresso" no content script), não
+   um percentual vindo da IA. */
+.rwc-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 14px;
+  border: 1px solid var(--rwc-border);
+  border-radius: 14px;
+  background: var(--rwc-bg-soft);
+}
+.rwc-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.rwc-progress-fase {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--rwc-text);
+}
+.rwc-progress-eta {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rwc-purple);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rwc-progress-track {
+  height: 8px;
+  border-radius: 99px;
+  background: #ece7f6;
   overflow: hidden;
-  vertical-align: bottom;
+}
+.rwc-progress-fill {
+  position: relative;
+  height: 100%;
   width: 0;
-  animation: rwc-dots-grow 1.4s infinite;
+  border-radius: 99px;
+  background: var(--rwc-grad);
+  overflow: hidden;
+  /* Casa com o tique de 250ms do desenho: sem a transição a barra andaria
+     aos saltos. */
+  transition: width 0.25s linear;
 }
-.rwc-dots::after {
-  content: "...";
+.rwc-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-100%);
+  animation: rwc-progress-brilho 1.6s ease-in-out infinite;
 }
-/* Cada par de porcentagens iguais (ex: 24%/25%) segura a largura parada e
-   troca quase instantaneamente pro próximo valor — dá o efeito de "." "." "."
-   aparecendo um de cada vez, sem depender de steps()/jump-term do CSS. */
-@keyframes rwc-dots-grow {
-  0%,
-  24% {
-    width: 0;
+.rwc-progress-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.rwc-progress-hint {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--rwc-text-soft);
+}
+.rwc-progress-pct {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--rwc-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Espera por sobrecarga da IA: a barra segura a posição de propósito (a
+   próxima tentativa nem começou), então é o pulso que mostra que a extensão
+   continua trabalhando. */
+.rwc-progress--espera .rwc-progress-fill {
+  animation: rwc-progress-pulsa 1.4s ease-in-out infinite;
+}
+.rwc-progress--espera .rwc-progress-eta {
+  color: var(--rwc-amber);
+}
+@keyframes rwc-progress-brilho {
+  0% {
+    transform: translateX(-100%);
   }
-  25%,
-  49% {
-    width: 0.34em;
-  }
-  50%,
-  74% {
-    width: 0.68em;
-  }
-  75%,
-  99% {
-    width: 1em;
-  }
+  60%,
   100% {
-    width: 0;
+    transform: translateX(100%);
+  }
+}
+@keyframes rwc-progress-pulsa {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -594,6 +647,21 @@
 #rwc-bubble:hover {
   transform: scale(1.08);
 }
+/* Anel de progresso em volta do balão: mesma fração da barra do painel, para
+   quem deixou o painel minimizado continuar vendo o quanto falta. A máscara
+   radial transforma o disco do conic-gradient em aro. */
+#rwc-bubble.rwc-bubble--carregando::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  /* Roxo, e não branco: o aro fica FORA do balão, sobre o fundo claro do
+     Freshworks — em branco ele simplesmente sumiria. */
+  background: conic-gradient(var(--rwc-purple) var(--rwc-progresso, 0%), rgba(124, 58, 237, 0.22) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  pointer-events: none;
+}
 #rwc-bubble .rwc-bubble-dots,
 #rwc-bubble .rwc-bubble-check,
 #rwc-bubble .rwc-bubble-erro {
@@ -656,7 +724,8 @@
   #rwc-panel,
   #rwc-launcher-button,
   .rwc-spinner,
-  .rwc-dots,
+  .rwc-progress-fill,
+  .rwc-progress-fill::after,
   .rwc-bubble-dots span,
   #rwc-bubble .rwc-bubble-check,
   #rwc-bubble .rwc-bubble-erro {

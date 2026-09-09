@@ -112,6 +112,9 @@ async function chamarGeminiComRetry(url, body, onTentativa, tentativas = 3) {
       if (status === 429) dica = " (limite de uso da IA atingido, tente novamente em instantes)";
       if (status === 503) dica = " (modelo sobrecarregado no momento, tente novamente em instantes)";
       const falha = new Error(`A IA retornou ${status}${dica}. ${corpo}`);
+      // Modelo sem suporte a raciocínio configurável: o chamador repete a
+      // chamada sem o campo em vez de devolver erro ao agente.
+      falha.raciocinioRecusado = status === 400 && /thinking/i.test(corpo);
       // Marca o erro como transitório: em vez de desistir e obrigar o agente
       // a refazer tudo, o chamador reagenda o trabalho (que já está guardado
       // com o tipo de resumo escolhido e a transcrição pronta).
@@ -129,28 +132,87 @@ async function chamarGeminiComRetry(url, body, onTentativa, tentativas = 3) {
   }
 }
 
-async function gerarResumoIA(apiKey, partes, onTentativa) {
+// Devolve, junto do texto, quanto tempo cada etapa levou — é isso que
+// realimenta a estimativa das próximas gerações. `aoTerminarAudios` avisa
+// no instante em que os áudios saem do caminho e só sobra a espera pela IA,
+// para a barra de progresso trocar de fase (e de estimativa) na hora certa.
+// Quanto raciocínio interno o modelo pode gastar ANTES de escrever a
+// resposta. É o parâmetro que mais pesa no tempo: sem limite, um modelo
+// Gemini 3 "pensa" por vários segundos e ainda consome parte do
+// maxOutputTokens com isso (era por isso que 2048 tokens cortavam o resumo
+// detalhado no meio). Resumir uma transcrição dentro de um template fixo não
+// precisa disso — MINIMAL é "little to no thinking" na definição da API. O
+// detalhado fica em LOW porque ele ainda precisa organizar ponto a ponto o
+// que foi tratado na conversa.
+const NIVEL_RACIOCINIO = {
+  breve: "MINIMAL",
+  normal: "MINIMAL",
+  detalhado: "LOW",
+};
+
+// thinkingConfig só existe em modelos que suportam raciocínio (Gemini 3+).
+// Se o modelo for trocado um dia por um que não aceite o campo, a API
+// devolve 400 — em vez de quebrar a extensão inteira, a primeira recusa
+// desliga o campo e guarda isso aqui.
+async function raciocinioDesligado() {
+  try {
+    const { rwcSemRaciocinio } = await api.storage.local.get("rwcSemRaciocinio");
+    return !!rwcSemRaciocinio;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function gerarResumoIA(apiKey, tipo, partes, eventos) {
+  const { aoTerminarAudios, aoTentativa } = eventos || {};
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(
     apiKey
   )}`;
 
+  const inicioAudios = Date.now();
   const partesResolvidas = await resolverPartes(partes);
+  const audioMs = Date.now() - inicioAudios;
+  if (aoTerminarAudios) aoTerminarAudios();
 
-  const resp = await chamarGeminiComRetry(
-    url,
-    {
-      contents: [{ parts: partesResolvidas }],
+  const inicioIa = Date.now();
+  const corpoDaChamada = (comRaciocinio) => ({
+    contents: [{ parts: partesResolvidas }],
+    generationConfig: {
+      temperature: 0.3,
       // 2048 tokens já cortava o resumo detalhado no meio (às vezes só
-      // "Dor do cliente" saía completo): modelos mais novos gastam parte
-      // desse limite com raciocínio interno antes de escrever a resposta
-      // visível, sobrando pouco pro texto em si num resumo com bastante
-      // conteúdo. 8192 dá folga de sobra pro texto sem custar muito mais.
-      generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+      // "Dor do cliente" saía completo): parte do limite ia embora em
+      // raciocínio interno antes de o modelo escrever a resposta visível.
+      // 8192 dá folga de sobra pro texto sem custar mais tempo — o teto não
+      // é gasto, só evita truncar.
+      maxOutputTokens: 8192,
+      ...(comRaciocinio
+        ? { thinkingConfig: { thinkingLevel: NIVEL_RACIOCINIO[tipo] || "MINIMAL" } }
+        : {}),
     },
-    onTentativa
-  );
+  });
+
+  let resp;
+  try {
+    resp = await chamarGeminiComRetry(url, corpoDaChamada(!(await raciocinioDesligado())), aoTentativa);
+  } catch (erro) {
+    if (!erro.raciocinioRecusado) throw erro;
+    console.warn("[rwc] modelo não aceita thinkingConfig; repetindo sem o campo");
+    await api.storage.local.set({ rwcSemRaciocinio: true });
+    resp = await chamarGeminiComRetry(url, corpoDaChamada(false), aoTentativa);
+  }
 
   const dados = await resp.json();
+
+  // Diagnóstico de tempo: "raciocínio" alto aqui é o sinal de que o modelo
+  // gastou o tempo pensando em vez de escrevendo, e é onde mexer se as
+  // gerações voltarem a demorar.
+  const uso = dados.usageMetadata || {};
+  console.log(
+    `[rwc] IA respondeu em ${((Date.now() - inicioIa) / 1000).toFixed(1)}s — tokens:`,
+    `entrada ${uso.promptTokenCount || 0},`,
+    `raciocínio ${uso.thoughtsTokenCount || 0},`,
+    `resposta ${uso.candidatesTokenCount || 0}`
+  );
   const cand = dados.candidates && dados.candidates[0];
   if (!cand) {
     throw new Error("A IA não retornou nenhum resultado. Tente novamente.");
@@ -174,7 +236,7 @@ async function gerarResumoIA(apiKey, partes, onTentativa) {
     const motivo = cand.finishReason ? ` (motivo: ${cand.finishReason})` : "";
     throw new Error(`A IA não gerou texto${motivo}.`);
   }
-  return texto;
+  return { texto, audioMs, iaMs: Date.now() - inicioIa };
 }
 
 const ROTULOS_TIPO = {
@@ -270,6 +332,83 @@ function notificar(titulo, mensagem) {
     title: titulo,
     message: mensagem,
   });
+}
+
+/* ==========================================================================
+   Estimativa de duração (barra de progresso).
+
+   A API usada aqui é uma chamada única, sem streaming: não existe "%
+   concluído" real vindo do Gemini para mostrar ao agente. O que dá para
+   prever bem é o TEMPO. Toda geração passa pelas mesmas três etapas
+   (leitura da tela, download dos áudios e a chamada à IA), então medimos
+   quanto cada uma levou a cada resumo concluído e usamos a média das
+   últimas execuções como estimativa da próxima. Nas primeiras vezes valem
+   os padrões abaixo.
+   ========================================================================== */
+const TEMPOS_PADRAO = {
+  leitura: 4000,
+  audio: 3500, // por áudio baixado
+  ia: { breve: 6000, normal: 8000, detalhado: 15000 },
+};
+
+// As médias aprendidas descrevem o comportamento de uma versão específica da
+// geração. Quando o que muda é justamente a velocidade (nível de raciocínio,
+// prompt, modelo, forma de ler a tela), o histórico antigo passa a prever o
+// tempo do jeito lento e a barra ficaria mentindo por umas 10 gerações até a
+// média migrar. Subir esta versão descarta o histórico e recalibra do zero.
+const VERSAO_TEMPOS = 2;
+
+// Média móvel curta: o histórico antigo não pode engessar a estimativa
+// quando a rede do agente (ou a fila do Gemini) muda de patamar.
+const MAX_AMOSTRAS = 10;
+
+let filaEscritaTempos = Promise.resolve();
+
+async function lerTempos() {
+  try {
+    const { rwcTempos } = await api.storage.local.get("rwcTempos");
+    return rwcTempos && rwcTempos.versao === VERSAO_TEMPOS ? rwcTempos : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function mediaSalva(tempos, chave, padrao) {
+  const amostra = tempos[chave];
+  return amostra && amostra.amostras > 0 && amostra.media > 0 ? amostra.media : padrao;
+}
+
+function estimativaIa(tempos, tipo) {
+  return mediaSalva(tempos, `ia:${tipo}`, TEMPOS_PADRAO.ia[tipo] || TEMPOS_PADRAO.ia.normal);
+}
+
+function estimativaAudios(tempos, totalAudios) {
+  return mediaSalva(tempos, "audio", TEMPOS_PADRAO.audio) * (totalAudios || 0);
+}
+
+// `amostras` é um objeto { chave: duracaoEmMs }; entradas <= 0 são
+// ignoradas, que é como o chamador descarta uma medição suja (ex: a
+// chamada à IA que só demorou porque teve retry por sobrecarga).
+function registrarTempos(amostras) {
+  filaEscritaTempos = filaEscritaTempos
+    .then(async () => {
+      const tempos = await lerTempos();
+      const novo = { ...tempos, versao: VERSAO_TEMPOS };
+      let mudou = false;
+      Object.entries(amostras).forEach(([chave, ms]) => {
+        if (!(ms > 0)) return;
+        const atual = novo[chave] || { media: 0, amostras: 0 };
+        const peso = Math.min(atual.amostras, MAX_AMOSTRAS - 1);
+        novo[chave] = {
+          media: Math.round((atual.media * peso + ms) / (peso + 1)),
+          amostras: Math.min(atual.amostras + 1, MAX_AMOSTRAS),
+        };
+        mudou = true;
+      });
+      if (mudou) await api.storage.local.set({ rwcTempos: novo });
+    })
+    .catch((erro) => console.error("[rwc] falha ao registrar tempos", erro));
+  return filaEscritaTempos;
 }
 
 /* ==========================================================================
@@ -444,11 +583,29 @@ function manterServiceWorkerAtivo(contexto, aindaGerando) {
 // Se a aba já tiver fechado, o sendResponse simplesmente falha em silêncio;
 // o trabalho em si não é interrompido por isso.
 async function processarGeracaoDeResumo(mensagem, sendResponse) {
+  const tipo = mensagem.tipo || "";
+  const tempos = await lerTempos();
+  const totalAudios = (mensagem.parts || []).filter((p) => p && p.audioUrl).length;
+
+  // O relógio da barra de progresso começa no clique do agente (no content
+  // script), não aqui: a leitura da tela já é espera para ele. Numa
+  // retomada, `inicioEm` continua sendo o do pedido original — o tempo já
+  // gasto entra na conta em vez de a barra recomeçar do zero.
+  const inicioEm = Number(mensagem.inicioEm) || Date.now();
+  const leituraMs = Number(mensagem.leituraMs) || 0;
+  const decorrido = Math.max(0, Date.now() - inicioEm);
+
   const contexto = {
     status: "gerando",
     url: mensagem.url || "",
-    tipo: mensagem.tipo || "",
+    tipo,
     solicitacaoId: mensagem.solicitacaoId || "",
+    inicioEm,
+    totalAudios,
+    fase: totalAudios ? "audios" : "ia",
+    estimativaMs: Math.round(
+      decorrido + estimativaAudios(tempos, totalAudios) + estimativaIa(tempos, tipo)
+    ),
     atualizadoEm: Date.now(),
   };
   console.log("[rwc] geração iniciada", contexto.tipo, contexto.url);
@@ -463,6 +620,8 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
     tipo: contexto.tipo,
     parts: mensagem.parts,
     retomadas: mensagem.retomadas || 0,
+    inicioEm,
+    leituraMs,
     criadoEm: Date.now(),
   });
 
@@ -485,15 +644,47 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
       return;
     }
 
-    const texto = await gerarResumoIA(apiKey, mensagem.parts, () => {
-      // Heartbeat: cada retry por sobrecarga do Gemini atualiza atualizadoEm,
-      // então o content script sabe que ainda está vivo em vez de só ver
-      // "gerando" parado por dezenas de segundos.
-      tocarHeartbeat(contexto);
+    let houveRetry = false;
+    const { texto, audioMs, iaMs } = await gerarResumoIA(apiKey, tipo, mensagem.parts, {
+      aoTerminarAudios: () => {
+        if (!totalAudios) return; // não havia áudio: a fase já começou em "ia"
+        // Etapa dos áudios encerrada: a estimativa deixa de embutir o chute
+        // por áudio e passa a valer o tempo que eles realmente levaram, mais
+        // a chamada à IA que ainda vem. A barra corrige o rumo aqui em vez
+        // de arrastar o erro até o fim.
+        contexto.fase = "ia";
+        contexto.estimativaMs = Math.round(
+          Date.now() - inicioEm + estimativaIa(tempos, contexto.tipo)
+        );
+        contexto.atualizadoEm = Date.now();
+        salvarResumo({ ...contexto });
+      },
+      aoTentativa: () => {
+        houveRetry = true;
+        // Heartbeat: cada retry por sobrecarga do Gemini atualiza atualizadoEm,
+        // então o content script sabe que ainda está vivo em vez de só ver
+        // "gerando" parado por dezenas de segundos.
+        tocarHeartbeat(contexto);
+      },
     });
     finalizado = true;
+    contexto.fase = "pronto";
     const prontoDados = { ...contexto, status: "pronto", texto, atualizadoEm: Date.now() };
     await salvarResumo(prontoDados);
+
+    // Só realimenta a estimativa com medição limpa. Numa retomada o relógio
+    // inclui o tempo em que o worker esteve morto, e um retry mede a
+    // sobrecarga do Gemini — nos dois casos a duração não representa o
+    // trabalho em si e estragaria a previsão das próximas gerações.
+    // Aguarda a gravação: o worker pode ser encerrado logo depois do
+    // sendResponse e a medição desta geração se perderia.
+    if (!(mensagem.retomadas > 0)) {
+      await registrarTempos({
+        leitura: leituraMs,
+        audio: totalAudios ? audioMs / totalAudios : 0,
+        [`ia:${contexto.tipo}`]: houveRetry ? 0 : iaMs,
+      });
+    }
     console.log("[rwc] geração concluída", contexto.tipo, contexto.url);
     notificar("Rewind Chat", `${ROTULOS_TIPO[mensagem.tipo] || "Resumo"} pronto.`);
     sendResponse({ ok: true, text: texto });
@@ -516,11 +707,20 @@ async function processarGeracaoDeResumo(mensagem, sendResponse) {
         parts: mensagem.parts,
         retomadas: retomadasFeitas,
         ultimoErro: erroMsg,
+        inicioEm,
+        leituraMs,
         criadoEm: Date.now(),
       });
       await salvarResumo({
         ...contexto,
         status: "gerando",
+        fase: "espera",
+        // A barra não pode seguir correndo para o fim enquanto a próxima
+        // tentativa nem começou: a estimativa passa a incluir a espera do
+        // reagendamento mais uma chamada inteira à IA.
+        estimativaMs: Math.round(
+          Date.now() - inicioEm + ESPERA_REAGENDAMENTO_MS + estimativaIa(tempos, contexto.tipo)
+        ),
         proximaTentativaEm: Date.now() + ESPERA_REAGENDAMENTO_MS,
         atualizadoEm: Date.now(),
       });

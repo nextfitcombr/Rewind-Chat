@@ -37,14 +37,14 @@ Resumo objetivo do atendimento, informando o necessário para quem for continuar
 - **Dor do cliente:** qual o problema/necessidade relatado, com módulo do sistema e dados relevantes (ex: nome do aluno) quando fizerem parte do relato.
 - **O que foi abordado:** as principais dúvidas tratadas e as ações/orientações do agente durante o atendimento.
 - **O que falta resolver:** pendências, status atual, próximos passos ou o que ainda está aguardando algo/alguém.
-Um pouco mais de contexto que o resumo breve, mas sem repetir informação — frases completas e diretas.`,
+Um pouco mais de contexto que o resumo breve, mas sem repetir informação — frases completas e diretas, no máximo duas ou três por tópico.`,
 
     detalhado: `TIPO DE RESUMO: DETALHADO
 O foco aqui é detalhar tudo o que foi discutido no atendimento, para outro atendente entender o caso a fundo sem reler a conversa inteira. Use exatamente esta estrutura:
 - **Dor do cliente:** o problema/dúvida inicial, com módulo do sistema e dados relevantes (ex: nome do aluno) quando citados.
 - **O que foi abordado:** cada dúvida ou ponto tratado na conversa, com detalhe do que foi perguntado, verificado e como foi respondido/orientado.
 - **O que falta resolver:** o que ficou em aberto, sem solução, ou aguardando algo/alguém.
-Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tópico não tiver informação na conversa, escreva "Não informado".`,
+Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem inchar o texto: não repita a mesma informação em tópicos diferentes, não reescreva com outras palavras o que já foi dito e não narre a conversa mensagem a mensagem — uma linha por ponto tratado. Se algum tópico não tiver informação na conversa, escreva "Não informado".`,
   };
 
   const ROTULOS_TIPO = {
@@ -53,10 +53,48 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     detalhado: "Resumo detalhado",
   };
 
+  // Etapas pelas quais a geração passa, na ordem. "espera" é a exceção:
+  // acontece só quando a IA responde que está sobrecarregada e o background
+  // reagenda a tentativa.
+  const ROTULOS_FASE = {
+    leitura: "Lendo a conversa da tela",
+    audios: "Preparando os áudios do atendimento",
+    ia: "A IA está escrevendo o resumo",
+    espera: "IA sobrecarregada, tentando de novo",
+    pronto: "Resumo pronto",
+  };
+
+  const DICAS_FASE = {
+    leitura: "Não troque de contato até a leitura terminar.",
+    audios: "Os áudios da conversa vão junto para a IA.",
+    ia: "Já pode trocar de contato — o resumo continua sendo gerado.",
+    espera: "A próxima tentativa começa sozinha em instantes.",
+  };
+
+  // Espelha os padrões do script de background: aqui eles servem para
+  // estimar a barra durante a leitura da tela, que acontece antes de o
+  // background assumir a geração.
+  const TEMPOS_PADRAO = {
+    leitura: 4000,
+    audio: 3500, // por áudio baixado
+    ia: { breve: 6000, normal: 8000, detalhado: 15000 },
+  };
+
+  // Precisa casar com o VERSAO_TEMPOS do script de background, que é quem
+  // grava as médias: histórico de uma versão anterior da geração é
+  // descartado em vez de prever o tempo do jeito antigo.
+  const VERSAO_TEMPOS = 2;
+
   let painelEl = null;
   let botaoEl = null;
   let tipoEmAndamento = null;
   let urlAtual = location.href;
+
+  // Estado da barra de progresso da geração em andamento (ver bloco
+  // "Barra de progresso" mais abaixo).
+  let progresso = null;
+  let progressoTimer = null;
+  let progressoFimTimer = null;
 
   // Balão flutuante: só existe pra dar um status visual quando o painel
   // está minimizado durante uma geração (nada disso aparece com o painel
@@ -167,6 +205,39 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Conta os itens de mensagem que estão na tela agora. Usa o mesmo par de
+  // seletores da coleta (primário, com fallback) para funcionar nos dois
+  // layouts, e serve só como sinal de "chegou coisa nova" — quem lê o
+  // conteúdo de verdade é coletarMensagens().
+  function contarItensNaTela() {
+    const primario = document.querySelectorAll(SELECTORS.messageItem).length;
+    return primario || document.querySelectorAll("[class*='message']").length;
+  }
+
+  // Espera o Freshworks carregar o trecho anterior da conversa depois de uma
+  // rolagem. Antes isso era um sleep fixo de 450ms por rolagem: numa conversa
+  // longa, com dezenas de rolagens, o tempo parado somava vários segundos
+  // mesmo quando as mensagens já tinham aparecido em 100ms. Agora a espera
+  // termina assim que aparece mensagem nova e o teto só é gasto quando não
+  // veio nada — que é justamente o sinal de que o início da conversa foi
+  // alcançado.
+  async function esperarCarregarMaisMensagens(itensAntes, tetoMs) {
+    const limite = Date.now() + tetoMs;
+    const restante = () => Math.max(0, limite - Date.now());
+    while (restante() > 0) {
+      await esperar(Math.min(40, restante()));
+      if (contarItensNaTela() > itensAntes) {
+        // Os itens acabaram de entrar no DOM; um respiro curto evita ler um
+        // <li> ainda pela metade e ter que voltar nele na rolagem seguinte.
+        // Limitado ao teto: assim, quando o Freshworks está lento, esta
+        // rolagem custa no máximo o que o sleep fixo antigo custava — a
+        // otimização nunca sai mais cara que o comportamento anterior.
+        await esperar(Math.min(80, restante()));
+        return;
+      }
+    }
+  }
+
   function chaveMensagem(m) {
     return m.tipo === "audio" ? `${m.autor}::audio::${m.url}` : `${m.autor}::${m.texto}`;
   }
@@ -199,8 +270,9 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     let tentativasSemNovidade = 0;
     for (let i = 0; i < 25 && tentativasSemNovidade < 3; i++) {
       const totalAntes = mensagens.length;
+      const itensAntes = contarItensNaTela();
       container.scrollTop = 0;
-      await esperar(450);
+      await esperarCarregarMaisMensagens(itensAntes, 450);
       mensagens = mesclarMensagens(mensagens, coletarMensagens());
       if (mensagens.length === totalAntes) tentativasSemNovidade++;
       else tentativasSemNovidade = 0;
@@ -372,10 +444,13 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
 
     if (dados.status === "gerando" && Date.now() - (dados.atualizadoEm || 0) > GERANDO_TIMEOUT_MS) {
       definirCarregando(false);
+      pararProgresso();
       mostrarStatus("error", "A geração anterior não terminou (a extensão pode ter sido reiniciada). Tente novamente.");
     } else if (dados.status === "gerando") {
       definirCarregando(true);
-      mostrarStatus("gerando");
+      // Fase e estimativa vêm do background, então a barra continua correta
+      // mesmo num painel que só abriu no meio da geração (ou em outra aba).
+      aplicarProgressoDoRegistro(dados);
       // Garante que o balão passe a acompanhar esta geração mesmo quando ela
       // não foi iniciada por esta função (ex: painel forçado a abrir ao
       // carregar a página com uma geração já em andamento nesta conversa).
@@ -383,6 +458,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       atualizarBalaoDaGeracaoAcompanhada(dados);
     } else if (dados.status === "pronto") {
       definirCarregando(false);
+      concluirProgresso();
       painelEl.querySelector("#rwc-result-tag").textContent = ROTULOS_TIPO[dados.tipo] || "Resumo";
       renderizarResumo(dados.texto);
       painelEl.querySelector("#rwc-result").dataset.raw = dados.texto;
@@ -393,6 +469,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       atualizarIndicadorPendente();
     } else if (dados.status === "erro") {
       definirCarregando(false);
+      pararProgresso();
       mostrarStatus("error", dados.erro || "Ocorreu um erro inesperado.");
     }
   }
@@ -411,14 +488,27 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       return;
     }
 
+    // A barra também é acompanhada aqui, e não só em exibirResumo: se o
+    // agente trocou de conversa no meio da geração, exibirResumo ignora este
+    // registro (é de outra conversa) e nada mais moveria — nem pararia — o
+    // cronômetro. O cuidado é não mexer na barra quando ela já é de outra
+    // geração: se o agente pediu um resumo novo na conversa em que está,
+    // quem manda no painel (e no anel) é essa geração, não a antiga.
+    const barraDesteRegistro =
+      !progresso || progresso.solicitacaoId === (dados.solicitacaoId || "");
+
     if (dados.status === "gerando" && Date.now() - (dados.atualizadoEm || 0) > GERANDO_TIMEOUT_MS) {
       estadoAtual = "erro";
+      if (barraDesteRegistro) pararProgresso();
     } else if (dados.status === "gerando") {
       estadoAtual = "gerando";
+      if (barraDesteRegistro) aplicarProgressoDoRegistro(dados);
     } else if (dados.status === "pronto") {
       estadoAtual = "pronto";
+      if (barraDesteRegistro) concluirProgresso();
     } else if (dados.status === "erro") {
       estadoAtual = "erro";
+      if (barraDesteRegistro) pararProgresso();
     } else {
       return;
     }
@@ -513,6 +603,20 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
         </div>
 
         <div id="rwc-status" class="rwc-status rwc-hidden"></div>
+
+        <div id="rwc-progress" class="rwc-progress rwc-hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="rwc-progress-head">
+            <span class="rwc-progress-fase" id="rwc-progress-fase">Gerando resumo</span>
+            <span class="rwc-progress-eta" id="rwc-progress-eta"></span>
+          </div>
+          <div class="rwc-progress-track">
+            <div class="rwc-progress-fill" id="rwc-progress-fill"></div>
+          </div>
+          <div class="rwc-progress-foot">
+            <span class="rwc-progress-hint" id="rwc-progress-hint"></span>
+            <span class="rwc-progress-pct" id="rwc-progress-pct">0%</span>
+          </div>
+        </div>
 
         <section id="rwc-result" class="rwc-result rwc-hidden">
           <div class="rwc-result-header">
@@ -681,6 +785,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     tipoEmAndamento = null;
     estadoAtual = null;
     urlGeracaoAcompanhada = null;
+    pararProgresso();
     resumoPendente = false;
     atualizarIndicadorPendente();
     fecharPainel();
@@ -768,14 +873,186 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     el.className = `rwc-status rwc-status--${tipo}`;
     if (tipo === "loading") {
       el.innerHTML = `<span class="rwc-spinner"></span><span>${mensagem}</span>`;
-    } else if (tipo === "gerando") {
-      el.innerHTML = `Gerando resumo<span class="rwc-dots"></span>`;
     } else {
       el.textContent = mensagem;
     }
   }
   function esconderStatus() {
     painelEl.querySelector("#rwc-status").classList.add("rwc-hidden");
+  }
+
+  /* ========================================================================
+     Barra de progresso.
+
+     A chamada à IA não é streaming, então não existe "% pronto" real vindo
+     do Gemini — o que a barra mostra é TEMPO. O background guarda quando a
+     geração começou (`inicioEm`) e quanto ela deve durar (`estimativaMs`,
+     calibrada sozinha pela média das gerações anteriores); aqui só
+     desenhamos quanto disso já passou e quanto falta. Durante a leitura da
+     tela, que acontece antes do handoff para o background, a estimativa é
+     montada aqui mesmo.
+     ======================================================================== */
+  async function lerTempos() {
+    try {
+      const { rwcTempos } = await api.storage.local.get("rwcTempos");
+      return rwcTempos && rwcTempos.versao === VERSAO_TEMPOS ? rwcTempos : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function mediaSalva(tempos, chave, padrao) {
+    const amostra = tempos[chave];
+    return amostra && amostra.amostras > 0 && amostra.media > 0 ? amostra.media : padrao;
+  }
+
+  function estimativaIa(tempos, tipo) {
+    return mediaSalva(tempos, `ia:${tipo}`, TEMPOS_PADRAO.ia[tipo] || TEMPOS_PADRAO.ia.normal);
+  }
+
+  // Chega a 94% quando a estimativa vence: cravar 100% antes de o resumo
+  // existir seria mentira, e travar a barra ali pareceria congelamento.
+  // Passado esse ponto ela segue subindo cada vez mais devagar rumo a 99%.
+  function fracaoDoTempo(decorrido, estimativa) {
+    const bruto = decorrido / Math.max(estimativa, 1000);
+    if (bruto < 1) return bruto * 0.94;
+    return 0.94 + 0.05 * (1 - Math.exp(-(bruto - 1)));
+  }
+
+  function formatarDuracao(ms) {
+    const seg = Math.max(0, Math.round(ms / 1000));
+    if (seg < 60) return `${seg}s`;
+    const min = Math.floor(seg / 60);
+    const resto = seg % 60;
+    return resto ? `${min}min ${resto}s` : `${min}min`;
+  }
+
+  function iniciarProgresso(estado) {
+    if (progressoFimTimer) {
+      clearTimeout(progressoFimTimer);
+      progressoFimTimer = null;
+    }
+    if (progressoTimer) clearInterval(progressoTimer);
+    progresso = { fracaoMax: 0, concluido: false, ...estado };
+    // 250ms deixa o contador de tempo restante andar de segundo em segundo
+    // sem parecer travado, e é barato o suficiente para rodar dentro da
+    // página do Freshworks.
+    progressoTimer = setInterval(desenharProgresso, 250);
+    desenharProgresso();
+  }
+
+  function atualizarProgresso(estado) {
+    // solicitacaoId diferente = outra geração (o agente clicou de novo):
+    // recomeça em vez de herdar a fração já percorrida pela anterior.
+    if (!progresso || progresso.solicitacaoId !== estado.solicitacaoId) {
+      iniciarProgresso(estado);
+      return;
+    }
+    Object.assign(progresso, estado);
+    desenharProgresso();
+  }
+
+  function pararProgresso() {
+    if (progressoTimer) {
+      clearInterval(progressoTimer);
+      progressoTimer = null;
+    }
+    if (progressoFimTimer) {
+      clearTimeout(progressoFimTimer);
+      progressoFimTimer = null;
+    }
+    progresso = null;
+    esconderBlocoProgresso();
+    if (balaoEl) {
+      balaoEl.style.removeProperty("--rwc-progresso");
+      balaoEl.title = "Rewind Chat";
+    }
+  }
+
+  // Fecho da barra: completa até 100% e só então some. Sem isso ela
+  // desapareceria em 94% no exato momento em que o resumo aparece.
+  function concluirProgresso() {
+    if (!progresso) {
+      pararProgresso();
+      return;
+    }
+    if (progressoTimer) {
+      clearInterval(progressoTimer);
+      progressoTimer = null;
+    }
+    progresso.concluido = true;
+    progresso.fase = "pronto";
+    desenharProgresso();
+    if (progressoFimTimer) clearTimeout(progressoFimTimer);
+    progressoFimTimer = setTimeout(() => {
+      progressoFimTimer = null;
+      pararProgresso();
+    }, 550);
+  }
+
+  function esconderBlocoProgresso() {
+    if (!painelEl) return;
+    painelEl.querySelector("#rwc-progress").classList.add("rwc-hidden");
+  }
+
+  function aplicarProgressoDoRegistro(dados) {
+    atualizarProgresso({
+      url: dados.url || location.href,
+      solicitacaoId: dados.solicitacaoId || "",
+      inicioEm: Number(dados.inicioEm) || Date.now(),
+      estimativaMs: Number(dados.estimativaMs) || TEMPOS_PADRAO.ia.normal,
+      fase: dados.fase || "ia",
+    });
+  }
+
+  function desenharProgresso() {
+    if (!progresso) return;
+    const decorrido = Math.max(0, Date.now() - progresso.inicioEm);
+    const estimativa = Math.max(progresso.estimativaMs || 0, 1000);
+    const fracao = progresso.concluido
+      ? 1
+      : Math.max(progresso.fracaoMax, fracaoDoTempo(decorrido, estimativa));
+    // A barra nunca anda para trás: quando a estimativa cresce (retry da
+    // IA), ela segura a posição em vez de recuar.
+    progresso.fracaoMax = fracao;
+
+    const restante = estimativa - decorrido;
+    const pct = Math.round(fracao * 100);
+    const eta = progresso.concluido
+      ? "concluído"
+      : restante > 1500
+      ? `~${formatarDuracao(restante)} restantes`
+      : "finalizando...";
+
+    atualizarAnelBalao(fracao, eta);
+
+    // O balão acompanha a geração mesmo se o agente trocar de conversa; o
+    // painel é sempre sobre a conversa aberta agora.
+    if (!painelEl || idDaConversa(progresso.url) !== idDaConversa(location.href)) {
+      esconderBlocoProgresso();
+      return;
+    }
+
+    const bloco = painelEl.querySelector("#rwc-progress");
+    bloco.classList.remove("rwc-hidden");
+    bloco.classList.toggle("rwc-progress--espera", progresso.fase === "espera");
+    bloco.setAttribute("aria-valuenow", String(pct));
+    bloco.querySelector("#rwc-progress-fill").style.width = `${(fracao * 100).toFixed(1)}%`;
+    bloco.querySelector("#rwc-progress-fase").textContent =
+      ROTULOS_FASE[progresso.fase] || "Gerando resumo";
+    bloco.querySelector("#rwc-progress-eta").textContent = eta;
+    bloco.querySelector("#rwc-progress-pct").textContent = `${pct}%`;
+    bloco.querySelector("#rwc-progress-hint").textContent = DICAS_FASE[progresso.fase] || "";
+  }
+
+  // Com o painel minimizado o único sinal visível é o balão — o anel em
+  // volta dele mostra a mesma fração da barra, e o title leva o tempo que
+  // falta para quem passar o mouse.
+  function atualizarAnelBalao(fracao, eta) {
+    if (!balaoEl) return;
+    balaoEl.style.setProperty("--rwc-progresso", `${(fracao * 100).toFixed(1)}%`);
+    const fase = (progresso && ROTULOS_FASE[progresso.fase]) || "Gerando resumo";
+    balaoEl.title = `Rewind Chat — ${fase} (${eta})`;
   }
 
   function marcarTipoAtivo(tipo) {
@@ -819,11 +1096,29 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
     urlGeracaoAcompanhada = location.href;
     balaoUltimoEstadoMostrado = "gerando";
     atualizarBalao();
+
+    // O relógio da barra começa aqui e continua valendo depois do handoff:
+    // o background recebe este mesmo `inicioEm` e a leitura da tela entra
+    // no total, porque para o agente ela também é espera.
+    const solicitacaoId = gerarSolicitacaoId();
+    const inicioEm = Date.now();
+    const tempos = await lerTempos();
+    iniciarProgresso({
+      url: location.href,
+      solicitacaoId,
+      inicioEm,
+      // Até a leitura terminar não dá para saber quantos áudios a conversa
+      // tem, então a estimativa inicial é só leitura + chamada à IA.
+      estimativaMs:
+        mediaSalva(tempos, "leitura", TEMPOS_PADRAO.leitura) + estimativaIa(tempos, tipo),
+      fase: "leitura",
+    });
+
     try {
       // A leitura rola a tela do próprio atendimento para coletar as
-      // mensagens; trocar de contato/conversa agora interrompe a leitura,
-      // então avisamos claramente o agente para não trocar de tela ainda.
-      mostrarStatus("aviso", "Lendo a conversa da tela... Não troque de contato até a leitura terminar.");
+      // mensagens; trocar de contato/conversa agora interrompe a leitura —
+      // é a dica de fase "leitura" que avisa o agente para não trocar de
+      // tela ainda.
       const mensagens = await carregarConversaCompleta();
       if (tipo !== tipoEmAndamento) return; // agente trocou de tipo enquanto lia a tela
 
@@ -832,7 +1127,21 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
           "Nenhuma mensagem encontrada nesta tela. Abra um atendimento e tente novamente."
         );
       }
+      const leituraMs = Date.now() - inicioEm;
+      const totalAudios = mensagens.filter((m) => m.tipo === "audio").length;
       const parts = montarPartesPrompt(tipo, mensagens);
+
+      // Refaz a estimativa com o tempo real da leitura e o número de áudios
+      // agora conhecido, para a barra não ficar parada entre o fim da
+      // leitura e o primeiro registro do background.
+      atualizarProgresso({
+        solicitacaoId,
+        fase: totalAudios ? "audios" : "ia",
+        estimativaMs:
+          leituraMs +
+          mediaSalva(tempos, "audio", TEMPOS_PADRAO.audio) * totalAudios +
+          estimativaIa(tempos, tipo),
+      });
 
       // Handoff: a partir daqui a geração roda inteira no script de background e
       // fica salva em storage. Fechar esta aba não interrompe mais nada —
@@ -847,15 +1156,16 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
           parts,
           tipo,
           url: location.href,
-          solicitacaoId: gerarSolicitacaoId(),
+          solicitacaoId,
+          inicioEm,
+          leituraMs,
         })
         .catch(() => {
           /* aba pode fechar aqui sem problema — resultado chega via storage */
         });
-
-      mostrarStatus("gerando");
     } catch (erro) {
       if (tipo !== tipoEmAndamento) return;
+      pararProgresso();
       mostrarStatus("error", erro.message || "Ocorreu um erro inesperado.");
       definirCarregando(false);
       estadoAtual = "erro";
@@ -962,6 +1272,12 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado. Se algum tóp
       // esta tela não deve ficar travada esperando por ela.
       definirCarregando(false);
     }
+    // Uma geração em andamento continua sendo acompanhada pelo balão — e
+    // pelo anel de progresso em volta dele —, então a barra só é encerrada
+    // de fato quando não há nada rodando; no meio de uma geração ela apenas
+    // sai do painel, que agora é de outra conversa.
+    if (estadoAtual === "gerando") esconderBlocoProgresso();
+    else pararProgresso();
     if (estadoAtual === "gerando") {
       // Trocou de contato com uma geração rolando: minimiza sozinho em vez
       // de deixar o painel aberto "vazio" na conversa nova — o balão
