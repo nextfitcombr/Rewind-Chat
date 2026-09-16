@@ -331,6 +331,127 @@
   cursor: not-allowed;
 }
 
+/* Modelos: botão que abre a lista de saídas com estrutura fixa. */
+.rwc-modelos {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rwc-modelos-toggle,
+.rwc-modelo-opcao {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1.5px solid var(--rwc-border);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.rwc-modelos-toggle {
+  padding: 8px 12px 8px 8px;
+}
+.rwc-modelos-toggle:hover,
+.rwc-modelo-opcao:hover {
+  border-color: var(--rwc-border-strong);
+}
+.rwc-modelos-toggle:focus-visible,
+.rwc-modelo-opcao:focus-visible,
+.rwc-seg-btn:focus-visible {
+  box-shadow: 0 0 0 3px var(--rwc-ring);
+}
+.rwc-modelos-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--rwc-bg-soft);
+  color: var(--rwc-text-soft);
+  transition: background 0.15s, color 0.15s;
+}
+.rwc-modelos-toggle-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rwc-text-soft);
+}
+.rwc-modelos-chevron {
+  color: var(--rwc-text-faint);
+  transition: transform 0.18s ease;
+}
+.rwc-modelos-toggle--aberto .rwc-modelos-chevron {
+  transform: rotate(180deg);
+}
+/* Um modelo selecionado destaca o botão como os resumos destacam o seu. */
+.rwc-modelos-toggle--active {
+  border-color: var(--rwc-purple);
+  background: var(--rwc-purple-tint);
+}
+.rwc-modelos-toggle--active .rwc-modelos-toggle-icon {
+  background: var(--rwc-grad);
+  color: #fff;
+}
+.rwc-modelos-toggle--active .rwc-modelos-toggle-label {
+  color: var(--rwc-purple-dark);
+  font-weight: 700;
+}
+.rwc-modelos-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rwc-modelo-opcao {
+  gap: 12px;
+  padding: 10px 12px;
+}
+.rwc-modelo-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rwc-modelo-nome {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rwc-text);
+}
+.rwc-modelo-campos {
+  font-size: 11.5px;
+  color: var(--rwc-text-soft);
+}
+/* Mesmo visual do ícone dos tipos de resumo (.rwc-seg-icon): cinza em
+   repouso, gradiente quando selecionado. */
+.rwc-modelo-icone {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--rwc-bg-soft);
+  color: var(--rwc-text-soft);
+  transition: background 0.15s, color 0.15s;
+}
+.rwc-modelo-opcao--active {
+  border-color: var(--rwc-purple);
+  background: var(--rwc-purple-tint);
+  box-shadow: 0 0 0 3px var(--rwc-ring);
+}
+.rwc-modelo-opcao--active .rwc-modelo-icone {
+  background: var(--rwc-grad);
+  color: #fff;
+}
+.rwc-modelo-opcao:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .rwc-status {
   font-size: 12.5px;
   padding: 11px 13px;
@@ -563,6 +684,10 @@
 .rwc-item-body {
   padding-top: 4px;
   word-break: break-word;
+}
+.rwc-item-vazio {
+  color: var(--rwc-text-faint);
+  font-style: italic;
 }
 .rwc-item-body strong {
   color: var(--rwc-text);

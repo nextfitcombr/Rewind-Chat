@@ -45,12 +45,160 @@ O foco aqui é detalhar tudo o que foi discutido no atendimento, para outro aten
 - **O que foi abordado:** cada dúvida ou ponto tratado na conversa, com detalhe do que foi perguntado, verificado e como foi respondido/orientado.
 - **O que falta resolver:** o que ficou em aberto, sem solução, ou aguardando algo/alguém.
 Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem inchar o texto: não repita a mesma informação em tópicos diferentes, não reescreva com outras palavras o que já foi dito e não narre a conversa mensagem a mensagem — uma linha por ponto tratado. Se algum tópico não tiver informação na conversa, escreva "Não informado".`,
+
+    sugestao: `TIPO: MODELO DE SUGESTÃO
+Aqui o objetivo NÃO é resumir o atendimento: é registrar a sugestão de funcionalidade ou melhoria que o cliente trouxe, para ser levada ao time de produto. Responda EXATAMENTE nesta estrutura — estes três rótulos, nesta ordem, sem markdown, sem marcadores de lista e sem nenhum texto antes ou depois:
+
+Sugestão: ...
+
+Motivo: ...
+
+Modelo de operação: ...
+
+Como preencher cada campo:
+- Sugestão: de forma objetiva, qual funcionalidade ou melhoria foi sugerida. Escreva como a descrição da sugestão (ex: "Permitir que o aluno remarque a aula pelo app até 2h antes do horário."), não como narrativa da conversa.
+- Motivo: a dor do cliente que originou a sugestão e por que essa funcionalidade seria boa para ele — o que ela resolveria ou facilitaria na rotina do negócio.
+- Modelo de operação: apenas o tipo de negócio do cliente, em uma ou poucas palavras e sem explicação (ex: Academia, Estúdio, Quadra, Box de CrossFit, Escola de natação). Deduza pelo conteúdo da conversa (modalidades, aulas, quadras, planos citados).
+
+Se a conversa não tiver informação para algum campo, escreva "Não informado" nele. Nunca invente uma sugestão que não foi feita.`,
+
+    // Só a Situação vem da IA: título, ADM, Próximo passo e Anexos são fixos
+    // e escritos pelo background (ESTRUTURAS_FIXAS). Pedir só o que muda
+    // economiza resposta e tira da IA a chance de mexer nos campos fixos.
+    cancelamento: `TIPO: ANOTAÇÃO DE CANCELAMENTO
+Aqui o objetivo NÃO é resumir o atendimento: é registrar, para o time, a situação do cliente que pediu cancelamento. Responda com UMA única linha, exatamente neste formato, sem markdown e sem nenhum texto antes ou depois:
+
+Situação: ...
+
+Em "Situação", descreva de forma objetiva o motivo do cancelamento: por que o cliente quer cancelar e o contexto que levou a isso (ex: fechamento da unidade, custo, migração para outro sistema, falta de uma funcionalidade, insatisfação com o suporte). Uma a três frases, com os fatos citados na conversa.
+
+Não escreva nenhum outro campo — o restante da anotação é preenchido automaticamente. Se a conversa não trouxer o motivo do cancelamento, responda "Situação: Não informado". Nunca invente um motivo.`,
+
+    // Mesmo esquema do cancelamento: só a Situação vem da IA.
+    downgrade: `TIPO: SOLICITAÇÃO DE DOWNGRADE
+Aqui o objetivo NÃO é resumir o atendimento: é registrar, para o time de CSM, a situação do cliente que pediu downgrade (reduzir o plano contratado). Responda com UMA única linha, exatamente neste formato, sem markdown e sem nenhum texto antes ou depois:
+
+Situação: ...
+
+Em "Situação", explique de forma objetiva o motivo da solicitação: por que o cliente quer reduzir o plano e o contexto que levou a isso (ex: custo, queda no número de alunos, redução de unidades, não usar módulos ou funcionalidades do plano atual). Se a conversa disser para qual plano ou o que ele quer deixar de usar, inclua. Uma a três frases, com os fatos citados na conversa.
+
+Não escreva nenhum outro campo — o restante da solicitação é preenchido automaticamente. Se a conversa não trouxer o motivo, responda "Situação: Não informado". Nunca invente um motivo.`,
+
+    // Título, Demanda, Anexos e Próximo passo são fixos (ESTRUTURAS_FIXAS no
+    // background). Atenção ao nome: o CONTEXTO geral proíbe citá-lo, e este
+    // modelo precisa dele — por isso a exceção é dita explicitamente.
+    treinamento: `TIPO: SOLICITAÇÃO DE TREINAMENTO
+Aqui o objetivo NÃO é resumir o atendimento: é registrar a solicitação de treinamento do cliente para o agente que vai realizá-lo. Responda EXATAMENTE com estas cinco linhas, nesta ordem, sem markdown e sem nenhum texto antes ou depois:
+
+Quem entrou em contato: ...
+Qual sua função no negócio: ...
+Qual contato: ...
+Situação: ...
+O que já foi feito em relação a isso: ...
+
+Como preencher cada campo:
+- Quem entrou em contato: apenas o nome da pessoa que falou com o suporte, como aparece na conversa. EXCEÇÃO À REGRA GERAL: neste modelo o nome da pessoa é necessário e deve ser informado.
+- Qual sua função no negócio: apenas a função da pessoa no negócio (ex: Proprietário, Gerente, Recepcionista, Professor), sem explicação.
+- Qual contato: telefone ou e-mail que a pessoa tenha informado na conversa. Se nenhum contato foi citado, deixe vazio: "Qual contato:".
+- Situação: o que aconteceu, o que o cliente pediu e quais assuntos ou módulos do sistema o treinamento deve abordar.
+- O que já foi feito em relação a isso: o que o agente fez durante o atendimento para ajudar (orientações dadas, dúvidas já resolvidas, materiais enviados).
+
+Não escreva nenhum outro campo — o restante da solicitação é preenchido automaticamente. Se a conversa não trouxer informação para algum campo (exceto "Qual contato"), escreva "Não informado". Nunca invente informação.`,
+
+    // Só a Situação vem da IA: o título "ANOTAÇÃO" é fixo e Próximo passo e
+    // Anexos ficam em branco para o agente (ESTRUTURAS_FIXAS no background).
+    anotacao: `TIPO: ANOTAÇÃO
+Aqui o objetivo NÃO é resumir o atendimento: é registrar uma anotação objetiva do caso para o time. Responda com UMA única linha, exatamente neste formato, sem markdown e sem nenhum texto antes ou depois:
+
+Situação: ...
+
+Em "Situação", descreva o que aconteceu — o que o cliente relatou ou pediu, o contexto relevante e em que pé o caso ficou. Objetivo, de uma a quatro frases, com os fatos citados na conversa.
+
+Não escreva nenhum outro campo — o restante da anotação é preenchido automaticamente. Se a conversa não trouxer informação, responda "Situação: Não informado". Nunca invente informação.`,
+
+    // O título fixo fica por conta do background (ESTRUTURAS_FIXAS): aqui a
+    // IA só escreve os três campos.
+    clear: `TIPO: CLEAR
+Aqui o objetivo NÃO é resumir o atendimento inteiro: é preparar a passagem do caso para o próximo agente, com foco no que está acontecendo AGORA. Responda EXATAMENTE com estas três linhas, nesta ordem, sem markdown e sem nenhum texto antes ou depois:
+
+O que foi feito: ...
+Próximo passo: ...
+Cliente insatisfeito: ...
+
+Como preencher cada campo:
+- O que foi feito: resumo breve da situação atual do cliente — a questão mais recente do atendimento e o que já foi feito sobre ela. Se a conversa tratou de vários assuntos, foque no último. De uma a três frases.
+- Próximo passo: o que ficou pendente e o que o próximo agente precisa mostrar, verificar ou responder para o cliente.
+- Cliente insatisfeito: responda apenas "Sim" ou "Não", sem mais nada. "Sim" se o cliente demonstrou insatisfação, frustração ou reclamação (ex: irritação, cobrança por demora, ameaça de cancelar); caso contrário, "Não".
+
+Não escreva o título nem nenhum outro campo — eles são preenchidos automaticamente. Se a conversa não trouxer informação para "O que foi feito" ou "Próximo passo", escreva "Não informado". Nunca invente informação.`,
   };
 
   const ROTULOS_TIPO = {
     breve: "Resumo breve",
     normal: "Resumo normal",
     detalhado: "Resumo detalhado",
+    sugestao: "Modelo de sugestão",
+    cancelamento: "Anotação de cancelamento",
+    downgrade: "Solicitação de downgrade",
+    treinamento: "Solicitação de treinamento",
+    anotacao: "Anotação",
+    clear: "CLEAR",
+  };
+
+  // Modelos: tipos de saída com estrutura fixa, pensados para colar direto
+  // em outro lugar (diferente dos resumos, que são para leitura). Os rótulos
+  // de `campos` precisam casar com ESTRUTURAS_FIXAS no script de background,
+  // que é quem garante que a resposta da IA sai exatamente nesse formato.
+  // Um modelo novo entra aqui (+ prompt em PROMPTS e estrutura no
+  // background) e aparece sozinho na lista do painel.
+  const MODELOS = {
+    sugestao: {
+      nome: "Sugestão",
+      campos: ["Sugestão", "Motivo", "Modelo de operação"],
+      icone:
+        '<path d="M9 18h6"></path><path d="M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V17h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"></path>',
+    },
+    cancelamento: {
+      nome: "Cancelamento",
+      campos: ["ADM", "Situação", "Próximo passo", "Anexos"],
+      variante: "rosa",
+      icone: '<circle cx="12" cy="12" r="9.5"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line>',
+    },
+    downgrade: {
+      nome: "Downgrade",
+      campos: ["Situação", "Próximo passo", "Anexos"],
+      variante: "ambar",
+      icone: '<circle cx="12" cy="12" r="9.5"></circle><polyline points="8 12 12 16 16 12"></polyline><line x1="12" y1="7.5" x2="12" y2="16"></line>',
+    },
+    treinamento: {
+      nome: "Treinamento",
+      campos: [
+        "Demanda",
+        "Quem entrou em contato",
+        "Qual sua função no negócio",
+        "Qual contato",
+        "Situação",
+        "O que já foi feito em relação a isso",
+        "Anexos",
+        "Próximo passo",
+      ],
+      // Com oito campos, a lista de rótulos no card ficaria enorme.
+      descricao: "Contato, situação e o que já foi feito",
+      variante: "azul",
+      icone: '<path d="M22 10 12 5 2 10l10 5 10-5Z"></path><path d="M6 12v5c3 2 9 2 12 0v-5"></path>',
+    },
+    anotacao: {
+      nome: "Anotação",
+      campos: ["Situação", "Próximo passo", "Anexos"],
+      variante: "roxo",
+      icone: '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>',
+    },
+    clear: {
+      nome: "CLEAR",
+      campos: ["O que foi feito", "Próximo passo", "Cliente insatisfeito"],
+      variante: "roxo",
+      icone: '<path d="M17 3l4 4-4 4"></path><path d="M3 11V9a2 2 0 0 1 2-2h16"></path><path d="M7 21l-4-4 4-4"></path><path d="M21 13v2a2 2 0 0 1-2 2H3"></path>',
+    },
   };
 
   // Etapas pelas quais a geração passa, na ordem. "espera" é a exceção:
@@ -77,7 +225,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
   const TEMPOS_PADRAO = {
     leitura: 4000,
     audio: 3500, // por áudio baixado
-    ia: { breve: 6000, normal: 8000, detalhado: 15000 },
+    ia: { breve: 6000, normal: 8000, detalhado: 15000, sugestao: 6000, cancelamento: 5000, downgrade: 5000, treinamento: 7000, anotacao: 5000, clear: 6000 },
   };
 
   // Precisa casar com o VERSAO_TEMPOS do script de background, que é quem
@@ -323,10 +471,32 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
     abordado: '<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"></path><polyline points="22 4 12 14.1 8.5 10.6"></polyline>',
     faltaResolver: '<circle cx="12" cy="12" r="9.5"></circle><polyline points="12 6.5 12 12 16 14.2"></polyline>',
     info: '<circle cx="12" cy="12" r="9.5"></circle><line x1="12" y1="16" x2="12" y2="11.3"></line><line x1="12" y1="7.7" x2="12.01" y2="7.7"></line>',
+    operacao: '<path d="M3 21h18"></path><path d="M5 21V8l7-5 7 5v13"></path><path d="M9 21v-6h6v6"></path>',
+    pessoa: '<circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path>',
+    proximoPasso: '<line x1="4" y1="12" x2="19" y2="12"></line><polyline points="13 6 19 12 13 18"></polyline>',
+    funcao: '<rect x="3" y="7" width="18" height="13" rx="2"></rect><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="3" y1="13" x2="21" y2="13"></line>',
+    contato: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"></path>',
+    anexo: '<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path>',
+    insatisfeito: '<circle cx="12" cy="12" r="9.5"></circle><path d="M16 16.5s-1.5-2-4-2-4 2-4 2"></path><line x1="9" y1="9.5" x2="9.01" y2="9.5"></line><line x1="15" y1="9.5" x2="15.01" y2="9.5"></line>',
   };
 
-  function iconeParaRotulo(rotulo) {
+  function iconeParaRotulo(rotulo, tipo) {
     const r = rotulo.toLowerCase();
+    if (r === "adm") return { svg: ICONES_ITEM.pessoa, variante: "roxo" };
+    // "Situação" existe em mais de um modelo (cancelamento, downgrade): usa o
+    // ícone do próprio modelo, que é o que identifica a anotação.
+    if (r.includes("situação") && MODELOS[tipo]) {
+      return { svg: MODELOS[tipo].icone, variante: MODELOS[tipo].variante || "azul" };
+    }
+    if (r === "demanda") return { svg: ICONES_ITEM.info, variante: "roxo" };
+    if (r.includes("quem entrou em contato")) return { svg: ICONES_ITEM.pessoa, variante: "roxo" };
+    if (r.includes("função no negócio")) return { svg: ICONES_ITEM.funcao, variante: "roxo" };
+    if (r === "qual contato") return { svg: ICONES_ITEM.contato, variante: "roxo" };
+    if (r === "cliente insatisfeito") return { svg: ICONES_ITEM.insatisfeito, variante: "rosa" };
+    if (r.includes("próximo passo")) return { svg: ICONES_ITEM.proximoPasso, variante: "ambar" };
+    if (r.includes("anexo")) return { svg: ICONES_ITEM.anexo, variante: "roxo" };
+    if (r.includes("sugestão")) return { svg: MODELOS.sugestao.icone, variante: "azul" };
+    if (r.includes("modelo de operação")) return { svg: ICONES_ITEM.operacao, variante: "roxo" };
     if (r.includes("dor") || r.includes("motivo")) return { svg: ICONES_ITEM.dor, variante: "rosa" };
     if (r.includes("falta resolver") || r.includes("pendênc")) return { svg: ICONES_ITEM.faltaResolver, variante: "ambar" };
     if (
@@ -356,23 +526,38 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
     return itens;
   }
 
-  function renderizarResumo(texto) {
+  // Saída de modelo já chega normalizada pelo background como
+  // "Rótulo: valor" separados por linha em branco — sem o "- **" dos resumos.
+  function analisarModelo(texto, campos) {
+    return campos
+      .map((rotulo) => {
+        const linha = texto.split("\n").find((l) => l.startsWith(`${rotulo}:`));
+        return linha ? { rotulo, texto: linha.slice(rotulo.length + 1).trim() } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function renderizarResumo(texto, tipo) {
     const container = painelEl.querySelector("#rwc-result-text");
-    const itens = analisarItens(texto);
+    const itens = MODELOS[tipo] ? analisarModelo(texto, MODELOS[tipo].campos) : analisarItens(texto);
     if (!itens.length) {
       container.innerHTML = `<div class="rwc-result-plain">${formatarSaida(texto)}</div>`;
       return;
     }
     container.innerHTML = itens
       .map((item, i) => {
-        const { svg, variante } = iconeParaRotulo(item.rotulo);
+        const { svg, variante } = iconeParaRotulo(item.rotulo, tipo);
         const divisor = i < itens.length - 1 ? '<div class="rwc-item-divider"></div>' : "";
         return `
           <div class="rwc-item">
             <span class="rwc-item-icon rwc-item-icon--${variante}">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svg}</svg>
             </span>
-            <div class="rwc-item-body"><strong>${escaparHtml(item.rotulo)}:</strong> ${formatarSaida(item.texto)}</div>
+            <div class="rwc-item-body"><strong>${escaparHtml(item.rotulo)}:</strong> ${
+              // Campo que o modelo deixa em branco de propósito (ex: ADM): só
+              // aqui na tela aparece a indicação — o texto copiado sai vazio.
+              item.texto ? formatarSaida(item.texto) : '<span class="rwc-item-vazio">a preencher pelo agente</span>'
+            }</div>
           </div>
           ${divisor}
         `;
@@ -460,7 +645,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
       definirCarregando(false);
       concluirProgresso();
       painelEl.querySelector("#rwc-result-tag").textContent = ROTULOS_TIPO[dados.tipo] || "Resumo";
-      renderizarResumo(dados.texto);
+      renderizarResumo(dados.texto, dados.tipo);
       painelEl.querySelector("#rwc-result").dataset.raw = dados.texto;
       painelEl.querySelector("#rwc-result").classList.remove("rwc-hidden");
       // Painel minimizado quando terminou: o agente ainda não viu o
@@ -602,6 +787,28 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
           </button>
         </div>
 
+        <div class="rwc-modelos">
+          <button type="button" class="rwc-modelos-toggle" id="rwc-modelos-toggle" aria-expanded="false" aria-controls="rwc-modelos-lista">
+            <span class="rwc-modelos-toggle-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg></span>
+            <span class="rwc-modelos-toggle-label">Modelos</span>
+            <svg class="rwc-modelos-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+          <div class="rwc-modelos-lista rwc-hidden" id="rwc-modelos-lista">
+            ${Object.entries(MODELOS)
+              .map(
+                ([tipo, modelo]) => `
+            <button type="button" class="rwc-modelo-opcao" data-type="${tipo}">
+              <span class="rwc-modelo-icone"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${modelo.icone}</svg></span>
+              <span class="rwc-modelo-texto">
+                <span class="rwc-modelo-nome">${escaparHtml(modelo.nome)}</span>
+                <span class="rwc-modelo-campos">${escaparHtml(modelo.descricao || modelo.campos.join(" · "))}</span>
+              </span>
+            </button>`
+              )
+              .join("")}
+          </div>
+        </div>
+
         <div id="rwc-status" class="rwc-status rwc-hidden"></div>
 
         <div id="rwc-progress" class="rwc-progress rwc-hidden" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -670,6 +877,15 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
       const btn = e.target.closest(".rwc-seg-btn");
       if (!btn || btn.disabled) return;
       gerarResumo(btn.dataset.type);
+    });
+    painel.querySelector("#rwc-modelos-toggle").addEventListener("click", () => {
+      const lista = painel.querySelector("#rwc-modelos-lista");
+      alternarListaModelos(lista.classList.contains("rwc-hidden"));
+    });
+    painel.querySelector("#rwc-modelos-lista").addEventListener("click", (e) => {
+      const opcao = e.target.closest(".rwc-modelo-opcao");
+      if (!opcao || opcao.disabled) return;
+      gerarResumo(opcao.dataset.type);
     });
 
     return painel;
@@ -793,7 +1009,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
       painelEl.querySelector("#rwc-result").dataset.raw = "";
       esconderStatus();
-      painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => b.classList.remove("rwc-seg-btn--active"));
+      marcarTipoAtivo(null);
       definirCarregando(false);
     }
     if (!extensaoValida()) return;
@@ -1055,14 +1271,36 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
     balaoEl.title = `Rewind Chat — ${fase} (${eta})`;
   }
 
+  function alternarListaModelos(aberta) {
+    painelEl.querySelector("#rwc-modelos-lista").classList.toggle("rwc-hidden", !aberta);
+    const toggle = painelEl.querySelector("#rwc-modelos-toggle");
+    toggle.setAttribute("aria-expanded", String(aberta));
+    toggle.classList.toggle("rwc-modelos-toggle--aberto", aberta);
+  }
+
+  // `tipo` null limpa a seleção. Resumos e modelos são uma escolha só: marcar
+  // um modelo desmarca o resumo e vice-versa.
   function marcarTipoAtivo(tipo) {
     painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => {
       b.classList.toggle("rwc-seg-btn--active", b.dataset.type === tipo);
     });
+    painelEl.querySelectorAll(".rwc-modelo-opcao").forEach((b) => {
+      b.classList.toggle("rwc-modelo-opcao--active", b.dataset.type === tipo);
+    });
+    const ehModelo = !!MODELOS[tipo];
+    painelEl.querySelector("#rwc-modelos-toggle").classList.toggle("rwc-modelos-toggle--active", ehModelo);
+    // O modelo escolhido aparece no próprio botão e a lista fecha: com vários
+    // modelos, a lista aberta empurrava o resultado para fora da tela.
+    painelEl.querySelector(".rwc-modelos-toggle-label").textContent = ehModelo
+      ? `Modelos · ${MODELOS[tipo].nome}`
+      : "Modelos";
+    if (ehModelo) alternarListaModelos(false);
   }
 
   function definirCarregando(carregando) {
-    painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => (b.disabled = carregando));
+    painelEl
+      .querySelectorAll(".rwc-seg-btn, .rwc-modelo-opcao")
+      .forEach((b) => (b.disabled = carregando));
     if (botaoEl) botaoEl.classList.toggle("rwc-btn--loading", carregando);
   }
 
@@ -1267,7 +1505,7 @@ Traga o máximo de detalhe relevante sobre o CONTEÚDO conversado, mas sem incha
     if (painelEl) {
       painelEl.querySelector("#rwc-result").classList.add("rwc-hidden");
       esconderStatus();
-      painelEl.querySelectorAll(".rwc-seg-btn").forEach((b) => b.classList.remove("rwc-seg-btn--active"));
+      marcarTipoAtivo(null);
       // A geração antiga (se houver) virou responsabilidade só do background;
       // esta tela não deve ficar travada esperando por ela.
       definirCarregando(false);

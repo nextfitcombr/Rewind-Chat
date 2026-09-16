@@ -132,10 +132,6 @@ async function chamarGeminiComRetry(url, body, onTentativa, tentativas = 3) {
   }
 }
 
-// Devolve, junto do texto, quanto tempo cada etapa levou — é isso que
-// realimenta a estimativa das próximas gerações. `aoTerminarAudios` avisa
-// no instante em que os áudios saem do caminho e só sobra a espera pela IA,
-// para a barra de progresso trocar de fase (e de estimativa) na hora certa.
 // Quanto raciocínio interno o modelo pode gastar ANTES de escrever a
 // resposta. É o parâmetro que mais pesa no tempo: sem limite, um modelo
 // Gemini 3 "pensa" por vários segundos e ainda consome parte do
@@ -148,6 +144,12 @@ const NIVEL_RACIOCINIO = {
   breve: "MINIMAL",
   normal: "MINIMAL",
   detalhado: "LOW",
+  sugestao: "MINIMAL",
+  cancelamento: "MINIMAL",
+  downgrade: "MINIMAL",
+  treinamento: "MINIMAL",
+  anotacao: "MINIMAL",
+  clear: "MINIMAL",
 };
 
 // thinkingConfig só existe em modelos que suportam raciocínio (Gemini 3+).
@@ -163,6 +165,10 @@ async function raciocinioDesligado() {
   }
 }
 
+// Devolve, junto do texto, quanto tempo cada etapa levou — é isso que
+// realimenta a estimativa das próximas gerações. `aoTerminarAudios` avisa
+// no instante em que os áudios saem do caminho e só sobra a espera pela IA,
+// para a barra de progresso trocar de fase (e de estimativa) na hora certa.
 async function gerarResumoIA(apiKey, tipo, partes, eventos) {
   const { aoTerminarAudios, aoTentativa } = eventos || {};
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${encodeURIComponent(
@@ -236,14 +242,173 @@ async function gerarResumoIA(apiKey, tipo, partes, eventos) {
     const motivo = cand.finishReason ? ` (motivo: ${cand.finishReason})` : "";
     throw new Error(`A IA não gerou texto${motivo}.`);
   }
-  return { texto, audioMs, iaMs: Date.now() - inicioIa };
+  return { texto: aplicarEstruturaFixa(tipo, texto), audioMs, iaMs: Date.now() - inicioIa };
 }
 
 const ROTULOS_TIPO = {
   breve: "Resumo breve",
   normal: "Resumo normal",
   detalhado: "Resumo detalhado",
+  sugestao: "Modelo de sugestão",
+  cancelamento: "Anotação de cancelamento",
+  downgrade: "Solicitação de downgrade",
+  treinamento: "Solicitação de treinamento",
+  anotacao: "Anotação",
+  clear: "CLEAR",
 };
+
+/* ==========================================================================
+   Modelos com estrutura fixa.
+
+   Nos resumos, variação de formato é tolerável. Nos modelos não: o texto é
+   colado como está em outro lugar (ex: a planilha de sugestões do time), e
+   os campos precisam vir sempre com os mesmos rótulos, na mesma ordem. O
+   prompt pede isso, mas a IA às vezes devolve negrito, marcador de lista,
+   um campo a menos ou uma frase de introdução. Em vez de confiar nisso, a
+   resposta é remontada aqui a partir dos rótulos encontrados — o que chega
+   ao agente é sempre exatamente a estrutura definida.
+
+   Precisa casar com MODELOS no content script (que usa os mesmos rótulos
+   para desenhar o resultado).
+   ========================================================================== */
+//
+// `titulo` é uma linha fixa no topo. Um campo com `fixo` é escrito pela
+// extensão com exatamente esse valor — "" deixa o campo em branco para o
+// agente preencher — e qualquer coisa que a IA tenha escrito nele é
+// ignorada. Só os campos sem `fixo` vêm da resposta da IA.
+const ESTRUTURAS_FIXAS = {
+  sugestao: {
+    titulo: "@registrosugestão",
+    campos: [
+      { rotulo: "Sugestão" },
+      { rotulo: "Motivo" },
+      // Só o tipo de negócio ("Academia"): se a IA emendar uma explicação,
+      // ela é cortada.
+      { rotulo: "Modelo de operação", curto: true },
+    ],
+  },
+  cancelamento: {
+    titulo: "ANOTAÇÃO DE CANCELAMENTO",
+    campos: [
+      { rotulo: "ADM", fixo: "" },
+      { rotulo: "Situação" },
+      { rotulo: "Próximo passo", fixo: "Encaminhar ao CSM responsável." },
+      { rotulo: "Anexos", fixo: "" },
+    ],
+  },
+  downgrade: {
+    titulo: "SOLICITAÇÃO DE DOWNGRADE ⬇️",
+    campos: [
+      { rotulo: "Situação" },
+      {
+        rotulo: "Próximo passo",
+        fixo: "CSM Engajamento agir com a demanda, entrando em contato com o cliente.",
+      },
+      { rotulo: "Anexos", fixo: "" },
+    ],
+  },
+  treinamento: {
+    titulo: "SOLICITAÇÃO DE TREINAMENTO",
+    campos: [
+      // O agente troca o XXX e escolhe adicional/inicial.
+      { rotulo: "Demanda", fixo: "Treinamento XXX (ADICIONAL OU INICIAL)" },
+      { rotulo: "Quem entrou em contato" },
+      { rotulo: "Qual sua função no negócio", curto: true },
+      // Quase nunca vem na conversa e não é obrigatório: sem contato citado,
+      // o campo fica em branco em vez de "Não informado".
+      { rotulo: "Qual contato", vazioSeAusente: true },
+      { rotulo: "Situação" },
+      { rotulo: "O que já foi feito em relação a isso" },
+      { rotulo: "Anexos", fixo: "" },
+      {
+        rotulo: "Próximo passo",
+        fixo: "Encaminhar ao agente responsável para realizar o treinamento.",
+      },
+    ],
+  },
+  anotacao: {
+    titulo: "ANOTAÇÃO",
+    campos: [
+      { rotulo: "Situação" },
+      { rotulo: "Próximo passo", fixo: "" },
+      { rotulo: "Anexos", fixo: "" },
+    ],
+  },
+  clear: {
+    titulo: "CLEAR - [Motivo]",
+    campos: [
+      { rotulo: "O que foi feito" },
+      { rotulo: "Próximo passo" },
+      { rotulo: "Cliente insatisfeito", opcoes: ["Sim", "Não"] },
+    ],
+  },
+};
+
+const SEM_INFORMACAO = "Não informado";
+
+function semAcento(texto) {
+  return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function aplicarEstruturaFixa(tipo, texto) {
+  const estrutura = ESTRUTURAS_FIXAS[tipo];
+  if (!estrutura) return texto;
+  const { titulo, campos } = estrutura;
+
+  const valores = campos.map(() => []);
+  let campoAtual = -1;
+
+  texto.split("\n").forEach((bruta) => {
+    // NFC garante que "ã" ocupa um caractere tanto aqui quanto na versão sem
+    // acento — é isso que permite usar o tamanho do rótulo encontrado sem
+    // acento para cortar a linha original.
+    const linha = bruta
+      .normalize("NFC")
+      .replace(/\*\*|__/g, "")
+      .replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "")
+      .trim();
+    if (!linha) return;
+    // A IA às vezes repete o título; ele é recolocado no lugar certo abaixo.
+    if (titulo && semAcento(linha).replace(/:$/, "") === semAcento(titulo)) return;
+
+    const rotulo = semAcento(linha).match(/^([a-z ]+?)\s*:\s*/);
+    const indice = rotulo ? campos.findIndex((c) => semAcento(c.rotulo) === rotulo[1].trim()) : -1;
+    if (indice >= 0) {
+      campoAtual = indice;
+      const valor = linha.slice(rotulo[0].length).trim();
+      if (valor) valores[indice].push(valor);
+    } else if (campoAtual >= 0) {
+      // Continuação do campo anterior (a IA quebrou o parágrafo em linhas).
+      valores[campoAtual].push(linha);
+    }
+    // Linhas antes do primeiro rótulo são introdução da IA: descartadas.
+  });
+
+  const linhas = [];
+  campos.forEach((campo, i) => {
+    if ("fixo" in campo) {
+      linhas.push(campo.fixo ? `${campo.rotulo}: ${campo.fixo}` : `${campo.rotulo}:`);
+      return;
+    }
+    let valor = valores[i].join(" ").replace(/\s+/g, " ").trim();
+    const ausente = !valor || /^n[aã]o informado\.?$/i.test(valor);
+
+    if (campo.opcoes) {
+      // Só vale uma das opções, escrita exatamente como definida ("Sim",
+      // "Não"). Resposta ambígua ou ausente fica em branco para o agente
+      // decidir — a extensão não assume um "Não" por conta própria.
+      const inicio = semAcento(valor).replace(/[^a-z].*$/, "");
+      valor = ausente ? "" : campo.opcoes.find((o) => semAcento(o) === inicio) || "";
+    } else {
+      if (campo.curto) valor = valor.split(/\.\s|\s[-–—(]|;|\n/)[0].trim();
+      if (ausente) valor = campo.vazioSeAusente ? "" : SEM_INFORMACAO;
+    }
+    linhas.push(valor ? `${campo.rotulo}: ${valor}` : `${campo.rotulo}:`);
+  });
+
+  const corpo = linhas.join("\n\n");
+  return titulo ? `${titulo}\n\n${corpo}` : corpo;
+}
 
 // Identidade da conversa. Antes o resumo era casado por `location.href`
 // exato: qualquer query string que o Freshworks acrescente/remova sozinho
@@ -348,7 +513,7 @@ function notificar(titulo, mensagem) {
 const TEMPOS_PADRAO = {
   leitura: 4000,
   audio: 3500, // por áudio baixado
-  ia: { breve: 6000, normal: 8000, detalhado: 15000 },
+  ia: { breve: 6000, normal: 8000, detalhado: 15000, sugestao: 6000, cancelamento: 5000, downgrade: 5000, treinamento: 7000, anotacao: 5000, clear: 6000 },
 };
 
 // As médias aprendidas descrevem o comportamento de uma versão específica da
