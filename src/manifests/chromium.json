@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Rewind Chat",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Ferramenta interna da Next Fit para gerar resumos de atendimentos de suporte, lendo a conversa direto da tela do Freshchat.",
   "author": "Next Fit",
   "permissions": ["storage", "notifications", "alarms"],
